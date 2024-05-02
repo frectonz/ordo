@@ -1,0 +1,14 @@
+[package]
+name = "ordo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+warp = "0.3.7"
+sqlx = { version = "0.7", features = [ "runtime-tokio", "sqlite" ] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+color-eyre = "0.6.3"
+maud = { version = "0.26.0", features = ["warp"] }
+include_dir = "0.7.3"

@@ -1,0 +1,99 @@
+main {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+img {
+  width: 100%;
+}
+
+main>div {
+  padding: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+form {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+wired-input {
+  width: 100%;
+}
+
+wired-input>input {
+  background-color: orange;
+}
+
+form,
+img {
+  max-width: 500px;
+}
+
+form label {
+  font-size: 1.5rem;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.option>input {
+  flex: 1;
+}
+
+wired-icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.submit {
+  width: 100%;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+input {
+  background-color: transparent;
+  border: none;
+  border-bottom: 2px solid black;
+  font-size: 1rem;
+}
+
+button {
+  background-color: transparent;
+  border: 2px solid black;
+  font-size: 1rem;
+}
+
+#addOption {
+  width: fit-content;
+}
+
+@media (max-width: 800px) {
+  main {
+    display: grid;
+    grid-template-columns: repeat(1, 1fr);
+  }
+
+  main>div:nth-child(2) {
+    display: none;
+  }
+}
