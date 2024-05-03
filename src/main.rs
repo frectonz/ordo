@@ -13,7 +13,7 @@ async fn main() -> color_eyre::Result<()> {
 
     let _conn = SqliteConnection::connect("sqlite::memory:").await?;
 
-    let home = warp::path::end().and(views::homepage());
+    let home = warp::path::end().and(rooms::routes());
     let static_files = warp::path("static").and(statics::routes());
 
     let routes = static_files.or(home);
@@ -57,7 +57,6 @@ mod statics {
 
 mod views {
     use maud::{html, Markup, DOCTYPE};
-    use warp::Filter;
 
     pub fn with_layout(title: &str, head: Markup, body: Markup) -> Markup {
         html! {
@@ -80,49 +79,88 @@ mod views {
             }
         }
     }
+}
 
-    pub fn homepage() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone
-    {
-        warp::get().map(|| {
-            with_layout(
-                "Home",
-                html! {
-                    link rel="stylesheet" href="/static/css/home.css";
-                    script defer="true" src="/static/js/home.js" {}
-                },
-                html! {
-                    div {
-                        form {
-                            div."field" {
-                                label."hand" { "Name" }
-                                input."hand" name="name" required="true" placeholder="My super cool vote" {}
-                            }
+mod rooms {
+    use maud::html;
+    use warp::Filter;
 
-                            div."field" {
-                                label."hand" { "Options" }
+    use crate::views::with_layout;
 
-                                div."options" {
-                                    div."option" {
-                                        input."hand" name="option" required="true" placeholder="a choice" {}
-                                        button."hand delete" type="button" { "delete" }
-                                    }
-                                    div."option" {
-                                        input."hand" name="option" required="true" placeholder="a choice" {}
-                                        button."hand delete" type="button" { "delete" }
-                                    }
-                                }
-
-                                button."hand" id="addOption" type="button" { "add option" }
-                            }
-
-                            button."hand submit" type="submit" { "create room" }
+    fn homepage() -> impl warp::Reply {
+        with_layout(
+            "Home",
+            html! {
+                link rel="stylesheet" href="/static/css/home.css";
+                script defer="true" src="/static/js/home.js" {}
+            },
+            html! {
+                div {
+                    form method="POST" {
+                        div."field" {
+                            label."hand" { "Name" }
+                            input."hand" name="name" required="true" placeholder="My super cool vote" {}
                         }
+
+                        div."field" {
+                            label."hand" { "Options" }
+
+                            div."options" {
+                                div."option" {
+                                    input."hand" name="option" required="true" placeholder="a choice" {}
+                                    button."hand delete" type="button" { "delete" }
+                                }
+                                div."option" {
+                                    input."hand" name="option" required="true" placeholder="a choice" {}
+                                    button."hand delete" type="button" { "delete" }
+                                }
+                            }
+
+                            button."hand" id="addOption" type="button" { "add option" }
+                        }
+
+                        button."hand submit" type="submit" { "create room" }
                     }
-                    div {
-                        img src="/static/img/vote.svg";
-                    }
-                },
-            )
-        })
+                }
+                div {
+                    img src="/static/img/vote.svg";
+                }
+            },
+        )
+    }
+
+    async fn create_room(body: Vec<(String, String)>) -> Result<impl warp::Reply, warp::Rejection> {
+        let (name, options) =
+            body.into_iter()
+                .fold((None, None), |(mut name, mut options), (key, value)| {
+                    match key.as_str() {
+                        "name" if name.is_none() => name = Some(value),
+                        "option" => {
+                            options = match options {
+                                None => Some(vec![value]),
+                                Some(mut opts) => {
+                                    opts.push(value);
+                                    Some(opts)
+                                }
+                            }
+                        }
+                        _ => {}
+                    };
+
+                    return (name, options);
+                });
+
+        let (name, options) = match (name, options) {
+            (Some(name), Some(options)) => (name, options),
+            _ => return Err(warp::reject::not_found()),
+        };
+
+        Ok(with_layout("Waiting", html!(), html!()))
+    }
+
+    pub fn routes() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::get().map(homepage).or(warp::post()
+            .and(warp::body::form::<Vec<(String, String)>>())
+            .and_then(create_room))
     }
 }
