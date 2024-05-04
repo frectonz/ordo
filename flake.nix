@@ -44,12 +44,17 @@
         devShells.default = mkShell {
           buildInputs = [
             emmet-ls
+            sqlx-cli
             cargo-watch
             rust-analyzer
             rust-bin.stable.latest.default
             nodePackages.typescript-language-server
             nodePackages.vscode-langservers-extracted
           ];
+
+          shellHook = ''
+            export DATABASE_URL="sqlite:test.db"
+          '';
         };
 
         formatter = nixpkgs-fmt;

@@ -1,4 +1,6 @@
-use sqlx::{Connection, SqliteConnection};
+use std::env;
+
+use sqlx::{Pool, Sqlite};
 use tracing_subscriber::fmt::format::FmtSpan;
 use warp::Filter;
 
@@ -11,15 +13,24 @@ async fn main() -> color_eyre::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    let _conn = SqliteConnection::connect("sqlite::memory:").await?;
+    let db = env::var("DATABASE_URL")?;
+    let conn: Pool<Sqlite> = Pool::connect(&db).await?;
 
-    let home = warp::path::end().and(rooms::routes());
+    rooms::init_db(&conn).await?;
+
+    let home = warp::path::end().and(rooms::routes(conn));
     let static_files = warp::path("static").and(statics::routes());
 
     let routes = static_files.or(home);
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 
     Ok(())
+}
+
+fn with_db(
+    db: Pool<Sqlite>,
+) -> impl Filter<Extract = (Pool<Sqlite>,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || db.clone())
 }
 
 mod statics {
@@ -82,10 +93,12 @@ mod views {
 }
 
 mod rooms {
+    use color_eyre::eyre::Result;
     use maud::html;
-    use warp::Filter;
+    use sqlx::{Pool, Sqlite};
+    use warp::{http::Uri, Filter};
 
-    use crate::views::with_layout;
+    use crate::{views::with_layout, with_db};
 
     fn homepage() -> impl warp::Reply {
         with_layout(
@@ -129,7 +142,10 @@ mod rooms {
         )
     }
 
-    async fn create_room(body: Vec<(String, String)>) -> Result<impl warp::Reply, warp::Rejection> {
+    async fn create_room(
+        conn: Pool<Sqlite>,
+        body: Vec<(String, String)>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let (name, options) =
             body.into_iter()
                 .fold((None, None), |(mut name, mut options), (key, value)| {
@@ -154,13 +170,50 @@ mod rooms {
             (Some(name), Some(options)) => (name, options),
             _ => return Err(warp::reject::not_found()),
         };
+        let options =
+            serde_json::to_string(&options).or_else(|_| Err(warp::reject::not_found()))?;
 
-        Ok(with_layout("Waiting", html!(), html!()))
+        let id = sqlx::query!(
+            r#"
+        INSERT INTO rooms (name, options)
+        VALUES ( ?1, ?2 )
+            "#,
+            name,
+            options
+        )
+        .execute(&conn)
+        .await
+        .or_else(|_| Err(warp::reject::not_found()))?
+        .last_insert_rowid();
+
+        let uri = format!("/rooms/{}", id).parse::<Uri>().unwrap();
+
+        Ok(warp::redirect(uri))
     }
 
-    pub fn routes() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    pub fn routes(
+        conn: Pool<Sqlite>,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         warp::get().map(homepage).or(warp::post()
+            .and(with_db(conn))
             .and(warp::body::form::<Vec<(String, String)>>())
             .and_then(create_room))
+    }
+
+    pub async fn init_db(conn: &Pool<Sqlite>) -> Result<()> {
+        sqlx::query!(
+            r#"
+    CREATE TABLE IF NOT EXISTS rooms
+    (
+        id      INTEGER PRIMARY KEY NOT NULL,
+        name    TEXT                NOT NULL,
+        options TEXT                NOT NULL DEFAULT 0
+    );
+            "#
+        )
+        .execute(conn)
+        .await?;
+
+        Ok(())
     }
 }

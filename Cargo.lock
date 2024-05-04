@@ -950,6 +950,7 @@ dependencies = [
  "color-eyre",
  "include_dir",
  "maud",
+ "serde_json",
  "sqlx",
  "tokio",
  "tracing",
