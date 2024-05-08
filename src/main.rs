@@ -104,7 +104,7 @@ mod rooms {
         let rooms = sqlx::query!("SELECT count(id) as count FROM rooms")
             .fetch_one(&conn)
             .await
-            .or_else(|_| Err(warp::reject::not_found()))?;
+            .map_err(|_| warp::reject::not_found())?;
         let count = rooms.count.to_formatted_string(&Locale::en);
 
         let page = with_layout(
@@ -176,15 +176,14 @@ mod rooms {
                         _ => {}
                     };
 
-                    return (name, options);
+                    (name, options)
                 });
 
         let (name, options) = match (name, options) {
             (Some(name), Some(options)) => (name, options),
             _ => return Err(warp::reject::not_found()),
         };
-        let options =
-            serde_json::to_string(&options).or_else(|_| Err(warp::reject::not_found()))?;
+        let options = serde_json::to_string(&options).map_err(|_| warp::reject::not_found())?;
 
         let vid = Ulid::new().to_string();
         let admin_code = Ulid::new().to_string();
@@ -201,7 +200,7 @@ mod rooms {
         )
         .execute(&conn)
         .await
-        .or_else(|_| Err(warp::reject::not_found()))?;
+        .map_err(|_| warp::reject::not_found())?;
 
         let uri = format!("/rooms/{vid}").parse::<Uri>().unwrap();
 
@@ -225,7 +224,7 @@ mod rooms {
         )
         .fetch_one(&conn)
         .await
-        .or_else(|_| Err(warp::reject::not_found()))?;
+        .map_err(|_| warp::reject::not_found())?;
 
         let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
 
