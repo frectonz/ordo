@@ -19,7 +19,7 @@ async fn main() -> color_eyre::Result<()> {
     let home = rooms::routes(conn);
     let static_files = warp::path("static").and(statics::routes());
 
-    let routes = static_files.or(home);
+    let routes = static_files.or(home).recover(rejections::handle_rejection);
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 
     Ok(())
@@ -98,13 +98,17 @@ mod rooms {
     use ulid::Ulid;
     use warp::{http::Uri, Filter};
 
-    use crate::{views::with_layout, with_db};
+    use crate::{
+        rejections::{CouldNotCreateNewRoom, CouldNotGetCount, RoomNotFound},
+        views::with_layout,
+        with_db,
+    };
 
     async fn homepage(conn: Pool<Sqlite>) -> Result<impl warp::Reply, warp::Rejection> {
         let rooms = sqlx::query!("SELECT count(id) as count FROM rooms")
             .fetch_one(&conn)
             .await
-            .map_err(|_| warp::reject::not_found())?;
+            .map_err(|_| warp::reject::custom(CouldNotGetCount))?;
         let count = rooms.count.to_formatted_string(&Locale::en);
 
         let page = with_layout(
@@ -183,7 +187,8 @@ mod rooms {
             (Some(name), Some(options)) => (name, options),
             _ => return Err(warp::reject::not_found()),
         };
-        let options = serde_json::to_string(&options).map_err(|_| warp::reject::not_found())?;
+        let options =
+            serde_json::to_string(&options).expect("failed to serialize `options` into json");
 
         let vid = Ulid::new().to_string();
         let admin_code = Ulid::new().to_string();
@@ -200,7 +205,7 @@ mod rooms {
         )
         .execute(&conn)
         .await
-        .map_err(|_| warp::reject::not_found())?;
+        .map_err(|_| warp::reject::custom(CouldNotCreateNewRoom))?;
 
         let uri = format!("/rooms/{vid}").parse::<Uri>().unwrap();
 
@@ -224,7 +229,7 @@ mod rooms {
         )
         .fetch_one(&conn)
         .await
-        .map_err(|_| warp::reject::not_found())?;
+        .map_err(|_| warp::reject::custom(RoomNotFound))?;
 
         let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
 
@@ -263,5 +268,83 @@ mod rooms {
             .and_then(room_page);
 
         room_page.or(create_room).or(homepage)
+    }
+}
+
+mod rejections {
+    use std::convert::Infallible;
+
+    use maud::{html, Markup};
+    use warp::{
+        http::StatusCode,
+        reject::{Reject, Rejection},
+        reply::Reply,
+    };
+
+    use crate::views::with_layout;
+
+    macro_rules! rejects {
+        ($($name:ident),*) => {
+            $(
+                #[derive(Debug)]
+                pub struct $name;
+
+                impl Reject for $name {}
+            )*
+        };
+    }
+
+    rejects!(RoomNotFound, CouldNotGetCount, CouldNotCreateNewRoom);
+
+    pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+        let code;
+        let message;
+
+        if err.is_not_found() {
+            code = StatusCode::NOT_FOUND;
+            message = "NOT_FOUND";
+        } else if let Some(RoomNotFound) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "ROOM_NOT_FOUND";
+        } else if let Some(CouldNotGetCount) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_GET_COUNT";
+        } else if let Some(CouldNotCreateNewRoom) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_CREATE_NEW_ROOM";
+        } else if err
+            .find::<warp::filters::body::BodyDeserializeError>()
+            .is_some()
+        {
+            message = "BAD_REQUEST";
+            code = StatusCode::BAD_REQUEST;
+        } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
+            code = StatusCode::METHOD_NOT_ALLOWED;
+            message = "METHOD_NOT_ALLOWED";
+        } else {
+            eprintln!("unhandled rejection: {:?}", err);
+            code = StatusCode::INTERNAL_SERVER_ERROR;
+            message = "UNHANDLED_REJECTION";
+        }
+
+        Ok(warp::reply::with_status(error_page(message), code))
+    }
+
+    fn error_page(message: &str) -> Markup {
+        with_layout(
+            "Error",
+            html! {
+                link rel="stylesheet" href="/static/css/error.css";
+            },
+            html! {
+                div."error" {
+                    div {
+                        h1."bold" {"ERROR"}
+                        p."regular" {(message)}
+                    }
+                    img src="/static/img/death.svg";
+                }
+            },
+        )
     }
 }
