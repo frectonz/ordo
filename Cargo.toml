@@ -13,3 +13,5 @@ color-eyre = "0.6.3"
 maud = { version = "0.26.0", features = ["warp"] }
 include_dir = "0.7.3"
 serde_json = "1.0.116"
+num-format = "0.4.4"
+ulid = "1.1.2"

@@ -1,7 +1,6 @@
 * {
   margin: 0;
   box-sizing: border-box;
-  outline-offset: 5px;
 }
 
 body {
@@ -13,9 +12,24 @@ a {
   text-decoration: none;
 }
 
-.hand {
-  font-family: "Gloria Hallelujah", cursive;
+.logo {
+  font-family: "Darker Grotesque", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 900;
+  font-style: normal;
+}
+
+.regular {
+  font-family: "Darker Grotesque", sans-serif;
+  font-optical-sizing: auto;
   font-weight: 400;
+  font-style: normal;
+}
+
+.bold {
+  font-family: "Darker Grotesque", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 600;
   font-style: normal;
 }
 

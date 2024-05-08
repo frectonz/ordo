@@ -16,9 +16,7 @@ async fn main() -> color_eyre::Result<()> {
     let db = env::var("DATABASE_URL")?;
     let conn: Pool<Sqlite> = Pool::connect(&db).await?;
 
-    rooms::init_db(&conn).await?;
-
-    let home = warp::path::end().and(rooms::routes(conn));
+    let home = rooms::routes(conn);
     let static_files = warp::path("static").and(statics::routes());
 
     let routes = static_files.or(home);
@@ -77,7 +75,7 @@ mod views {
 
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
-                link href="https://fonts.googleapis.com/css2?family=Gloria+Hallelujah&display=swap" rel="stylesheet";
+                link href="https://fonts.googleapis.com/css2?family=Darker+Grotesque:wght@300..900&display=swap" rel="stylesheet";
 
                 link rel="stylesheet" href="/static/css/global.css";
                 (head)
@@ -85,7 +83,7 @@ mod views {
             }
 
             body {
-                header { h1."hand" { a href="/" { "ORDO" } } }
+                header { h1."logo" { a href="/" { "ORDO" } } }
                 main { (body) }
             }
         }
@@ -95,13 +93,21 @@ mod views {
 mod rooms {
     use color_eyre::eyre::Result;
     use maud::html;
+    use num_format::{Locale, ToFormattedString};
     use sqlx::{Pool, Sqlite};
+    use ulid::Ulid;
     use warp::{http::Uri, Filter};
 
     use crate::{views::with_layout, with_db};
 
-    fn homepage() -> impl warp::Reply {
-        with_layout(
+    async fn homepage(conn: Pool<Sqlite>) -> Result<impl warp::Reply, warp::Rejection> {
+        let rooms = sqlx::query!("SELECT count(id) as count FROM rooms")
+            .fetch_one(&conn)
+            .await
+            .or_else(|_| Err(warp::reject::not_found()))?;
+        let count = rooms.count.to_formatted_string(&Locale::en);
+
+        let page = with_layout(
             "Home",
             html! {
                 link rel="stylesheet" href="/static/css/home.css";
@@ -111,35 +117,42 @@ mod rooms {
                 div {
                     form method="POST" {
                         div."field" {
-                            label."hand" { "Name" }
-                            input."hand" name="name" required="true" placeholder="My super cool vote" {}
+                            label."bold" { "Name" }
+                            input."regular" name="name" required="true" placeholder="My super cool vote" {}
                         }
 
                         div."field" {
-                            label."hand" { "Options" }
+                            label."bold" { "Options" }
 
                             div."options" {
                                 div."option" {
-                                    input."hand" name="option" required="true" placeholder="a choice" {}
-                                    button."hand delete" type="button" { "delete" }
+                                    input."regular" name="option" required="true" placeholder="a choice" {}
+                                    button."bold delete" type="button" { "delete" }
                                 }
                                 div."option" {
-                                    input."hand" name="option" required="true" placeholder="a choice" {}
-                                    button."hand delete" type="button" { "delete" }
+                                    input."regular" name="option" required="true" placeholder="a choice" {}
+                                    button."bold delete" type="button" { "delete" }
                                 }
                             }
 
-                            button."hand" id="addOption" type="button" { "add option" }
+                            button."bold" id="addOption" type="button" { "add option" }
                         }
 
-                        button."hand submit" type="submit" { "create room" }
+                        button."bold submit" type="submit" { "create room" }
+                    }
+
+                    p."regular" {
+                        span."bold" { (count) }
+                        " rooms created so far"
                     }
                 }
                 div {
                     img src="/static/img/vote.svg";
                 }
             },
-        )
+        );
+
+        Ok(page)
     }
 
     async fn create_room(
@@ -173,47 +186,83 @@ mod rooms {
         let options =
             serde_json::to_string(&options).or_else(|_| Err(warp::reject::not_found()))?;
 
-        let id = sqlx::query!(
+        let vid = Ulid::new().to_string();
+        let admin_code = Ulid::new().to_string();
+
+        sqlx::query!(
             r#"
-        INSERT INTO rooms (name, options)
-        VALUES ( ?1, ?2 )
+        INSERT INTO rooms (vid, name, options, admin_code)
+        VALUES ( ?1, ?2, ?3, ?4 )
             "#,
+            vid,
             name,
-            options
+            options,
+            admin_code
         )
         .execute(&conn)
         .await
-        .or_else(|_| Err(warp::reject::not_found()))?
-        .last_insert_rowid();
+        .or_else(|_| Err(warp::reject::not_found()))?;
 
-        let uri = format!("/rooms/{}", id).parse::<Uri>().unwrap();
+        let uri = format!("/rooms/{vid}").parse::<Uri>().unwrap();
 
-        Ok(warp::redirect(uri))
+        Ok(warp::reply::with_header(
+            warp::redirect(uri),
+            "Set-Cookie",
+            format!("admin_code={admin_code}; HttpOnly; Max-Age=3600; Path=/rooms/{vid}; Secure"),
+        ))
+    }
+
+    async fn room_page(
+        conn: Pool<Sqlite>,
+        vid: String,
+        admin_code: Option<String>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let room = sqlx::query!(
+            r#"
+        SELECT name, options, admin_code FROM rooms WHERE vid = ?1
+            "#,
+            vid,
+        )
+        .fetch_one(&conn)
+        .await
+        .or_else(|_| Err(warp::reject::not_found()))?;
+
+        let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
+
+        let page = with_layout(
+            &room.name,
+            html! {
+                link rel="stylesheet" href="/static/css/room.css";
+            },
+            html! {
+                h1."bold" {
+                    @if is_admin {
+                        "You are the admin."
+                    } @else {
+                        "You are not the admin."
+                    }
+                }
+            },
+        );
+
+        Ok(page)
     }
 
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::get().map(homepage).or(warp::post()
-            .and(with_db(conn))
+        let homepage = warp::get().and(with_db(conn.clone())).and_then(homepage);
+
+        let create_room = warp::post()
+            .and(with_db(conn.clone()))
             .and(warp::body::form::<Vec<(String, String)>>())
-            .and_then(create_room))
-    }
+            .and_then(create_room);
 
-    pub async fn init_db(conn: &Pool<Sqlite>) -> Result<()> {
-        sqlx::query!(
-            r#"
-    CREATE TABLE IF NOT EXISTS rooms
-    (
-        id      INTEGER PRIMARY KEY NOT NULL,
-        name    TEXT                NOT NULL,
-        options TEXT                NOT NULL DEFAULT 0
-    );
-            "#
-        )
-        .execute(conn)
-        .await?;
+        let room_page = with_db(conn)
+            .and(warp::path!("rooms" / String))
+            .and(warp::cookie::optional("admin_code"))
+            .and_then(room_page);
 
-        Ok(())
+        room_page.or(create_room).or(homepage)
     }
 }

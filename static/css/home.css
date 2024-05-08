@@ -12,6 +12,8 @@ main>div {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  gap: 2rem;
 }
 
 form {
@@ -21,66 +23,64 @@ form {
   gap: 20px;
 }
 
-wired-input {
-  width: 100%;
-}
-
-wired-input>input {
-  background-color: orange;
-}
-
 form,
 img {
   max-width: 500px;
 }
 
 form label {
-  font-size: 1.5rem;
+  font-size: 2rem;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+input {
+  background-color: transparent;
+  border: none;
+  border: 1px solid black;
+  font-size: 1.3rem;
+  padding: 0.3rem 0.8rem;
+  box-shadow: 3px 3px black;
+}
+
+input:focus {
+  box-shadow: none;
 }
 
 .option {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 1rem;
 }
 
 .option>input {
   flex: 1;
 }
 
-wired-icon-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .options {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 1rem;
 }
 
 .submit {
   width: 100%;
 }
 
-.field {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-}
-
-input {
-  background-color: transparent;
-  border: none;
-  border-bottom: 2px solid black;
-  font-size: 1rem;
-}
-
 button {
   background-color: transparent;
-  border: 2px solid black;
-  font-size: 1rem;
+  border: 1px solid black;
+  font-size: 1.3rem;
+  padding: 0.3rem 0.8rem;
+  box-shadow: 3px 3px black;
+}
+
+button:focus {
+  box-shadow: none;
 }
 
 #addOption {
@@ -95,5 +95,15 @@ button {
 
   main>div:nth-child(2) {
     display: none;
+  }
+}
+
+@media (max-width: 500px) {
+  main>div {
+    padding: 0.5rem;
+  }
+
+  form {
+    width: 100%;
   }
 }
