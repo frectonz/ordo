@@ -25,9 +25,9 @@ async fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
-fn with_db(
-    db: Pool<Sqlite>,
-) -> impl Filter<Extract = (Pool<Sqlite>,), Error = std::convert::Infallible> + Clone {
+fn with_state<T: Clone + Send>(
+    db: T,
+) -> impl Filter<Extract = (T,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
 }
 
@@ -91,17 +91,29 @@ mod views {
 }
 
 mod rooms {
+    use std::{
+        collections::HashMap,
+        convert::Infallible,
+        sync::{Arc, Mutex},
+    };
+
     use color_eyre::eyre::Result;
+    use futures_util::StreamExt;
     use maud::html;
     use num_format::{Locale, ToFormattedString};
     use sqlx::{Pool, Sqlite};
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
     use ulid::Ulid;
-    use warp::{http::Uri, Filter};
+    use warp::{filters::sse, http::Uri, Filter};
 
     use crate::{
-        rejections::{CouldNotCreateNewRoom, CouldNotGetCount, RoomNotFound},
+        rejections::{
+            CouldNotCreateNewRoom, CouldNotCreateNewVoter, CouldNotDeserilizeOptions,
+            CouldNotGetCount, CouldNotGetVoterCountStream, RoomNotFound, VotersNotFound,
+        },
         views::with_layout,
-        with_db,
+        with_state,
     };
 
     async fn homepage(conn: Pool<Sqlite>) -> Result<impl warp::Reply, warp::Rejection> {
@@ -218,56 +230,219 @@ mod rooms {
 
     async fn room_page(
         conn: Pool<Sqlite>,
-        vid: String,
+        id_to_senders: IdToSenders,
+        room_vid: String,
         admin_code: Option<String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let room = sqlx::query!(
             r#"
-        SELECT name, options, admin_code FROM rooms WHERE vid = ?1
+        SELECT id, name, options, admin_code
+        FROM rooms 
+        WHERE vid = ?1
             "#,
-            vid,
+            room_vid,
         )
         .fetch_one(&conn)
         .await
         .map_err(|_| warp::reject::custom(RoomNotFound))?;
 
+        let voters = sqlx::query!(
+            r#"
+        SELECT vid, approved
+        FROM voters
+        WHERE room_id = ?1
+            "#,
+            room.id
+        )
+        .fetch_all(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(VotersNotFound))?;
+
         let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
 
-        let page = with_layout(
-            &room.name,
-            html! {
-                link rel="stylesheet" href="/static/css/room.css";
-            },
-            html! {
-                h1."bold" {
-                    @if is_admin {
-                        "You are the admin."
-                    } @else {
-                        "You are not the admin."
+        let options: Vec<String> = serde_json::from_str(&room.options)
+            .map_err(|_| warp::reject::custom(CouldNotDeserilizeOptions))?;
+
+        let voters_count = voters.len().to_formatted_string(&Locale::en);
+
+        let page = if is_admin {
+            with_layout(
+                &format!("Admin - {}", room.name),
+                html! {
+                    link rel="stylesheet" href="/static/css/admin.css";
+                    script src="https://unpkg.com/htmx.org@1.9.12" {}
+                    script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
+                },
+                html! {
+                    h1."bold" { (room.name) }
+
+                    div."warning regular" { "Room will close in less than an hour." }
+
+                    section."combo" {
+                        div {
+                            p."stat-num bold"
+                                hx-ext="sse"
+                                sse-connect={ "/rooms/" (room_vid) "/count" }
+                                hx-swap="innerHTML"
+                                sse-swap="message" { (voters_count) }
+                            p."stat-desc regular" { "voters in room"}
+                        }
+
+                        div {
+                            h2."bold" { "Options" }
+                            div."options" {
+                                @for option in options {
+                                    span."option regular" { (option) }
+                                }
+                            }
+                        }
                     }
+
+                    section."voters" {
+                            h2."bold" { "Voters" }
+
+                            @for voter in voters {
+                                div."voter" {
+                                    span."regular" { (voter.vid) }
+                                    button."approve bold" disabled=(voter.approved) {
+                                        @if voter.approved {
+                                            "Approved"
+                                        } @else {
+                                            "Approve"
+                                        }
+                                    }
+                                }
+                            }
+                    }
+                },
+            )
+        } else {
+            let voter_vid = Ulid::new().to_string();
+
+            sqlx::query!(
+                r#"
+            INSERT INTO voters (vid, room_id)
+            VALUES ( ?1, ?2 )
+                "#,
+                voter_vid,
+                room.id
+            )
+            .execute(&conn)
+            .await
+            .map_err(|_| warp::reject::custom(CouldNotCreateNewVoter))?;
+
+            let row = sqlx::query!(
+                r#"
+            SELECT count(id) as count
+            FROM voters
+            WHERE room_id = ?1
+                "#,
+                room.id
+            )
+            .fetch_one(&conn)
+            .await
+            .map_err(|_| warp::reject::custom(CouldNotCreateNewVoter))?;
+            let count = row.count.to_formatted_string(&Locale::en);
+
+            {
+                let map = id_to_senders.lock().unwrap();
+                let txs = map
+                    .get(&room_vid)
+                    .ok_or_else(|| warp::reject::custom(CouldNotGetVoterCountStream))?;
+
+                for tx in txs {
+                    let _ = tx.send(count.clone());
                 }
-            },
-        );
+            }
+
+            with_layout(
+                &format!("Voter - {}", room.name),
+                html! {
+                    link rel="stylesheet" href="/static/css/admin.css";
+                    script src="https://unpkg.com/htmx.org@1.9.12" {}
+                    script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
+                },
+                html! {
+                    h1."bold" { (room.name) }
+
+                    div."warning regular" { "Votes will start shortly." }
+
+                    section."combo" {
+                        div {
+                            p."stat-num bold"
+                                hx-ext="sse"
+                                sse-connect={ "/rooms/" (room_vid) "/count" }
+                                hx-swap="innerHTML"
+                                sse-swap="message" { (count) }
+                            p."stat-desc regular" { "voters in room"}
+                        }
+
+                        div {
+                            h2."bold" { "Your voter ID" }
+                            span."id" { (voter_vid) }
+                        }
+                    }
+                },
+            )
+        };
 
         Ok(page)
     }
 
+    async fn count_sse(
+        room_vid: String,
+        id_to_senders: IdToSenders,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        {
+            let mut map = id_to_senders.lock().unwrap();
+            let txs = map.entry(room_vid.clone()).or_default();
+            txs.push(tx);
+        }
+
+        let stream = UnboundedReceiverStream::new(rx);
+        let event_stream =
+            stream.map(|count| Ok::<sse::Event, Infallible>(sse::Event::default().data(count)));
+
+        Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
+    }
+
+    fn sse(
+        id_to_count_tx: IdToSenders,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("rooms" / String / "count")
+            .and(with_state(id_to_count_tx.clone()))
+            .and_then(count_sse)
+    }
+
+    type IdToSenders = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>>;
+
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        let homepage = warp::get().and(with_db(conn.clone())).and_then(homepage);
+        let id_to_count_tx: IdToSenders = Default::default();
+
+        let homepage = warp::path::end()
+            .and(warp::get())
+            .and(with_state(conn.clone()))
+            .and_then(homepage);
 
         let create_room = warp::post()
-            .and(with_db(conn.clone()))
+            .and(with_state(conn.clone()))
             .and(warp::body::form::<Vec<(String, String)>>())
             .and_then(create_room);
 
-        let room_page = with_db(conn)
+        let room_page = with_state(conn)
+            .and(with_state(id_to_count_tx.clone()))
             .and(warp::path!("rooms" / String))
             .and(warp::cookie::optional("admin_code"))
             .and_then(room_page);
 
-        room_page.or(create_room).or(homepage)
+        room_page
+            .or(create_room)
+            .or(homepage)
+            .or(sse(id_to_count_tx))
     }
 }
 
@@ -294,7 +469,17 @@ mod rejections {
         };
     }
 
-    rejects!(RoomNotFound, CouldNotGetCount, CouldNotCreateNewRoom);
+    rejects!(
+        RoomNotFound,
+        VotersNotFound,
+        CouldNotGetCount,
+        CouldNotSendCount,
+        CouldNotCreateNewRoom,
+        CouldNotCreateNewVoter,
+        CouldNotGetVoterCountTx,
+        CouldNotDeserilizeOptions,
+        CouldNotGetVoterCountStream
+    );
 
     pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
         let code;
@@ -306,12 +491,30 @@ mod rejections {
         } else if let Some(RoomNotFound) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "ROOM_NOT_FOUND";
+        } else if let Some(VotersNotFound) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "VOTERS_NOT_FOUND";
         } else if let Some(CouldNotGetCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_GET_COUNT";
+        } else if let Some(CouldNotSendCount) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_SEND_COUNT";
         } else if let Some(CouldNotCreateNewRoom) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_CREATE_NEW_ROOM";
+        } else if let Some(CouldNotCreateNewVoter) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_CREATE_NEW_VOTER";
+        } else if let Some(CouldNotGetVoterCountTx) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_GET_VOTER_COUNT_TRANSMITTER";
+        } else if let Some(CouldNotDeserilizeOptions) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_DESERILIZE_OPTIONS";
+        } else if let Some(CouldNotGetVoterCountStream) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_GET_VOTER_COUNT_STREAM";
         } else if err
             .find::<warp::filters::body::BodyDeserializeError>()
             .is_some()

@@ -1,6 +1,7 @@
 * {
   margin: 0;
   box-sizing: border-box;
+  text-transform: uppercase;
 }
 
 body {
@@ -44,8 +45,10 @@ header {
     10px 10px white,
     12px 12px black;
 
-  position: fixed;
+  position: sticky;
   top: 0;
+  z-index: 100000000;
+  background-color: orange;
 }
 
 main {
