@@ -99,10 +99,10 @@ mod rooms {
 
     use color_eyre::eyre::Result;
     use futures_util::StreamExt;
-    use maud::html;
+    use maud::{html, PreEscaped};
     use num_format::{Locale, ToFormattedString};
     use sqlx::{Pool, Sqlite};
-    use tokio::sync::mpsc;
+    use tokio::sync::mpsc::{self, UnboundedSender};
     use tokio_stream::wrappers::UnboundedReceiverStream;
     use ulid::Ulid;
     use warp::{filters::sse, http::Uri, Filter};
@@ -110,7 +110,8 @@ mod rooms {
     use crate::{
         rejections::{
             CouldNotCreateNewRoom, CouldNotCreateNewVoter, CouldNotDeserilizeOptions,
-            CouldNotGetCount, CouldNotGetVoterCountStream, RoomNotFound, VotersNotFound,
+            CouldNotGetCount, CouldNotGetVoterCountStream, CouldNotGetVotersStream, RoomNotFound,
+            VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -230,7 +231,8 @@ mod rooms {
 
     async fn room_page(
         conn: Pool<Sqlite>,
-        id_to_senders: IdToSenders,
+        id_to_count_senders: CountStreamIdToSenders,
+        id_to_voters_senders: VotersStreamIdToSenders,
         room_vid: String,
         admin_code: Option<String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -298,7 +300,11 @@ mod rooms {
                         }
                     }
 
-                    section."voters" {
+                    section."voters"
+                        hx-ext="sse"
+                        sse-connect={ "/rooms/" (room_vid) "/voters" }
+                        hx-swap="beforeend"
+                        sse-swap="message" {
                             h2."bold" { "Voters" }
 
                             @for voter in voters {
@@ -345,13 +351,31 @@ mod rooms {
             let count = row.count.to_formatted_string(&Locale::en);
 
             {
-                let map = id_to_senders.lock().unwrap();
+                let map = id_to_count_senders.lock().unwrap();
                 let txs = map
                     .get(&room_vid)
                     .ok_or_else(|| warp::reject::custom(CouldNotGetVoterCountStream))?;
 
                 for tx in txs {
                     let _ = tx.send(count.clone());
+                }
+            }
+
+            {
+                let map = id_to_voters_senders.lock().unwrap();
+                let txs = map
+                    .get(&room_vid)
+                    .ok_or_else(|| warp::reject::custom(CouldNotGetVotersStream))?;
+
+                let voter = html! {
+                    div."voter" {
+                        span."regular" { (voter_vid) }
+                        button."approve bold" { "Approve" }
+                    }
+                };
+
+                for tx in txs {
+                    let _ = tx.send(voter.clone());
                 }
             }
 
@@ -391,7 +415,7 @@ mod rooms {
 
     async fn count_sse(
         room_vid: String,
-        id_to_senders: IdToSenders,
+        id_to_senders: CountStreamIdToSenders,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -408,20 +432,49 @@ mod rooms {
         Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
     }
 
-    fn sse(
-        id_to_count_tx: IdToSenders,
-    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path!("rooms" / String / "count")
-            .and(with_state(id_to_count_tx.clone()))
-            .and_then(count_sse)
+    async fn voters_sse(
+        room_vid: String,
+        id_to_senders: VotersStreamIdToSenders,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        {
+            let mut map = id_to_senders.lock().unwrap();
+            let txs = map.entry(room_vid).or_default();
+            txs.push(tx);
+        }
+
+        let stream = UnboundedReceiverStream::new(rx);
+        let event_stream =
+            stream.map(|count| Ok::<sse::Event, Infallible>(sse::Event::default().data(count)));
+
+        Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
     }
 
-    type IdToSenders = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>>;
+    fn sse(
+        id_to_count_tx: CountStreamIdToSenders,
+        id_to_voter_tx: VotersStreamIdToSenders,
+    ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        let count_sse = warp::path!("rooms" / String / "count")
+            .and(with_state(id_to_count_tx))
+            .and_then(count_sse);
+
+        let visitor_sse = warp::path!("rooms" / String / "voters")
+            .and(with_state(id_to_voter_tx))
+            .and_then(voters_sse);
+
+        count_sse.or(visitor_sse)
+    }
+
+    type CountStreamIdToSenders = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>>;
+    type VotersStreamIdToSenders =
+        Arc<Mutex<HashMap<String, Vec<UnboundedSender<PreEscaped<String>>>>>>;
 
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        let id_to_count_tx: IdToSenders = Default::default();
+        let id_to_count_tx: CountStreamIdToSenders = Default::default();
+        let id_to_voter_tx: VotersStreamIdToSenders = Default::default();
 
         let homepage = warp::path::end()
             .and(warp::get())
@@ -435,6 +488,7 @@ mod rooms {
 
         let room_page = with_state(conn)
             .and(with_state(id_to_count_tx.clone()))
+            .and(with_state(id_to_voter_tx.clone()))
             .and(warp::path!("rooms" / String))
             .and(warp::cookie::optional("admin_code"))
             .and_then(room_page);
@@ -442,7 +496,7 @@ mod rooms {
         room_page
             .or(create_room)
             .or(homepage)
-            .or(sse(id_to_count_tx))
+            .or(sse(id_to_count_tx, id_to_voter_tx))
     }
 }
 
@@ -477,6 +531,7 @@ mod rejections {
         CouldNotCreateNewRoom,
         CouldNotCreateNewVoter,
         CouldNotGetVoterCountTx,
+        CouldNotGetVotersStream,
         CouldNotDeserilizeOptions,
         CouldNotGetVoterCountStream
     );
@@ -509,6 +564,9 @@ mod rejections {
         } else if let Some(CouldNotGetVoterCountTx) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_GET_VOTER_COUNT_TRANSMITTER";
+        } else if let Some(CouldNotGetVotersStream) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_GET_VOTERS_STREAM";
         } else if let Some(CouldNotDeserilizeOptions) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_DESERILIZE_OPTIONS";
