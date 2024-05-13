@@ -109,9 +109,9 @@ mod rooms {
 
     use crate::{
         rejections::{
-            CouldNotCreateNewRoom, CouldNotCreateNewVoter, CouldNotDeserilizeOptions,
-            CouldNotGetCount, CouldNotGetVoterCountStream, CouldNotGetVotersStream, RoomNotFound,
-            VotersNotFound,
+            CouldNotApproveVoter, CouldNotCreateNewRoom, CouldNotCreateNewVoter,
+            CouldNotDeserilizeOptions, CouldNotGetCount, CouldNotGetVoterCountStream,
+            CouldNotGetVotersStream, NotAnAdmin, RoomNotFound, VoterNotInRoom, VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -310,12 +310,13 @@ mod rooms {
                             @for voter in voters {
                                 div."voter" {
                                     span."regular" { (voter.vid) }
-                                    button."approve bold" disabled=(voter.approved) {
-                                        @if voter.approved {
-                                            "Approved"
-                                        } @else {
-                                            "Approve"
-                                        }
+
+                                    @if voter.approved {
+                                        button."approve bold" disabled { "Approved" }
+                                    } @else {
+                                        button."approve bold"
+                                            hx-post={ "/rooms/" (room_vid) "/voters/" (voter.vid) "/approve" }
+                                            hx-swap="outerHTML" { "Approved" }
                                     }
                                 }
                             }
@@ -370,7 +371,9 @@ mod rooms {
                 let voter = html! {
                     div."voter" {
                         span."regular" { (voter_vid) }
-                        button."approve bold" { "Approve" }
+                        button."approve bold"
+                            hx-post={ "/rooms/" (room_vid) "/voters/" (voter_vid) "/approve" }
+                            hx-swap="outerHTML"{ "Approve" }
                     }
                 };
 
@@ -459,16 +462,61 @@ mod rooms {
             .and(with_state(id_to_count_tx))
             .and_then(count_sse);
 
-        let visitor_sse = warp::path!("rooms" / String / "voters")
+        let voter_sse = warp::path!("rooms" / String / "voters")
             .and(with_state(id_to_voter_tx))
             .and_then(voters_sse);
 
-        count_sse.or(visitor_sse)
+        count_sse.or(voter_sse)
     }
 
     type CountStreamIdToSenders = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>>;
     type VotersStreamIdToSenders =
         Arc<Mutex<HashMap<String, Vec<UnboundedSender<PreEscaped<String>>>>>>;
+
+    async fn approve_voter(
+        conn: Pool<Sqlite>,
+        room_vid: String,
+        voter_vid: String,
+        admin_code: Option<String>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let room = sqlx::query!(
+            r#"SELECT id, admin_code FROM rooms WHERE vid = ?1"#,
+            room_vid
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(RoomNotFound))?;
+
+        let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
+        if !is_admin {
+            return Err(warp::reject::custom(NotAnAdmin));
+        }
+
+        let voter = sqlx::query!(r#"SELECT room_id FROM voters WHERE vid = ?1"#, voter_vid)
+            .fetch_one(&conn)
+            .await
+            .map_err(|_| warp::reject::custom(RoomNotFound))?;
+
+        let voter_in_room = room.id == voter.room_id;
+        if !voter_in_room {
+            return Err(warp::reject::custom(VoterNotInRoom));
+        }
+
+        sqlx::query!(
+            r#"UPDATE voters SET approved = true WHERE vid = ?1"#,
+            voter_vid
+        )
+        .execute(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(CouldNotApproveVoter))?;
+
+        let button = html! {
+            button."approve bold" disabled
+                hx-swap="outerHTML" { "Approved" }
+        };
+
+        Ok(button)
+    }
 
     pub fn routes(
         conn: Pool<Sqlite>,
@@ -486,16 +534,24 @@ mod rooms {
             .and(warp::body::form::<Vec<(String, String)>>())
             .and_then(create_room);
 
-        let room_page = with_state(conn)
+        let room_page = with_state(conn.clone())
             .and(with_state(id_to_count_tx.clone()))
             .and(with_state(id_to_voter_tx.clone()))
             .and(warp::path!("rooms" / String))
             .and(warp::cookie::optional("admin_code"))
             .and_then(room_page);
 
+        let approve_voter = with_state(conn)
+            .and(warp::path!(
+                "rooms" / String / "voters" / String / "approve"
+            ))
+            .and(warp::cookie::optional("admin_code"))
+            .and_then(approve_voter);
+
         room_page
             .or(create_room)
             .or(homepage)
+            .or(approve_voter)
             .or(sse(id_to_count_tx, id_to_voter_tx))
     }
 }
@@ -524,10 +580,13 @@ mod rejections {
     }
 
     rejects!(
+        NotAnAdmin,
         RoomNotFound,
+        VoterNotInRoom,
         VotersNotFound,
         CouldNotGetCount,
         CouldNotSendCount,
+        CouldNotApproveVoter,
         CouldNotCreateNewRoom,
         CouldNotCreateNewVoter,
         CouldNotGetVoterCountTx,
@@ -543,9 +602,15 @@ mod rejections {
         if err.is_not_found() {
             code = StatusCode::NOT_FOUND;
             message = "NOT_FOUND";
+        } else if let Some(NotAnAdmin) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "NOT_AN_ADMIN";
         } else if let Some(RoomNotFound) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "ROOM_NOT_FOUND";
+        } else if let Some(VoterNotInRoom) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "VOTER_NOT_IN_ROOM";
         } else if let Some(VotersNotFound) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "VOTERS_NOT_FOUND";
@@ -555,6 +620,9 @@ mod rejections {
         } else if let Some(CouldNotSendCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_SEND_COUNT";
+        } else if let Some(CouldNotApproveVoter) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_APPROVE_VOTER";
         } else if let Some(CouldNotCreateNewRoom) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_CREATE_NEW_ROOM";

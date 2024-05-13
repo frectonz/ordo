@@ -102,3 +102,8 @@ main h2 {
   box-shadow: 3px 3px black;
   color: black;
 }
+
+.approve:disabled {
+  opacity: 50%;
+  box-shadow: none;
+}
