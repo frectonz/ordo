@@ -407,6 +407,9 @@ mod rooms {
                         div {
                             h2."bold" { "Your voter ID" }
                             span."id" { (voter_vid) }
+                            div."warning regular" style="margin: 0; margin-top: 20px;" {
+                                "Waiting to be approved."
+                            }
                         }
                     }
                 },
