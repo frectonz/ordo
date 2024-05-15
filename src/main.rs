@@ -111,7 +111,8 @@ mod rooms {
         rejections::{
             CouldNotApproveVoter, CouldNotCreateNewRoom, CouldNotCreateNewVoter,
             CouldNotDeserilizeOptions, CouldNotGetCount, CouldNotGetVoterCountStream,
-            CouldNotGetVotersStream, NotAnAdmin, RoomNotFound, VoterNotInRoom, VotersNotFound,
+            CouldNotGetVotersStream, NotAnAdmin, RoomNotFound, VoterNotFound, VoterNotInRoom,
+            VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -407,7 +408,11 @@ mod rooms {
                         div {
                             h2."bold" { "Your voter ID" }
                             span."id" { (voter_vid) }
-                            div."warning regular" style="margin: 0; margin-top: 20px;" {
+                            div."warning regular"
+                                hx-get={ "/voters/" (voter_vid) "/approve" }
+                                hx-swap="outerHTML"
+                                hx-trigger="load delay:1s"
+                                style="margin: 0; margin-top: 20px;" {
                                 "Waiting to be approved."
                             }
                         }
@@ -521,6 +526,37 @@ mod rooms {
         Ok(button)
     }
 
+    async fn voter_approved(
+        conn: Pool<Sqlite>,
+        voter_vid: String,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let visitor = sqlx::query!(r#"SELECT approved FROM voters WHERE vid = ?1"#, voter_vid)
+            .fetch_one(&conn)
+            .await
+            .map_err(|_| warp::reject::custom(VoterNotFound))?;
+
+        let page = if visitor.approved {
+            html! {
+                div."warning regular"
+                    style="margin: 0; margin-top: 20px;" {
+                    "You have been approved to enter the vote."
+                }
+            }
+        } else {
+            html! {
+                div."warning regular"
+                    hx-get={ "/voters/" (voter_vid) "/approve" }
+                    hx-swap="outerHTML"
+                    hx-trigger="load delay:1s"
+                    style="margin: 0; margin-top: 20px;" {
+                    "Waiting to be approved."
+                }
+            }
+        };
+
+        Ok(page)
+    }
+
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -544,17 +580,23 @@ mod rooms {
             .and(warp::cookie::optional("admin_code"))
             .and_then(room_page);
 
-        let approve_voter = with_state(conn)
+        let approve_voter = with_state(conn.clone())
             .and(warp::path!(
                 "rooms" / String / "voters" / String / "approve"
             ))
             .and(warp::cookie::optional("admin_code"))
             .and_then(approve_voter);
 
+        let voter_approved = with_state(conn)
+            .and(warp::get())
+            .and(warp::path!("voters" / String / "approve"))
+            .and_then(voter_approved);
+
         room_page
             .or(create_room)
             .or(homepage)
             .or(approve_voter)
+            .or(voter_approved)
             .or(sse(id_to_count_tx, id_to_voter_tx))
     }
 }
@@ -585,6 +627,7 @@ mod rejections {
     rejects!(
         NotAnAdmin,
         RoomNotFound,
+        VoterNotFound,
         VoterNotInRoom,
         VotersNotFound,
         CouldNotGetCount,
@@ -614,6 +657,9 @@ mod rejections {
         } else if let Some(VoterNotInRoom) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "VOTER_NOT_IN_ROOM";
+        } else if let Some(VoterNotFound) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "VOTER_NOT_FOUND";
         } else if let Some(VotersNotFound) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "VOTERS_NOT_FOUND";
