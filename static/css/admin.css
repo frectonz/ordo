@@ -51,7 +51,7 @@ main h2 {
 
 .options {
   display: flex;
-  gap: 1rem;
+  gap: .5rem;
   flex-wrap: wrap;
   font-size: 1.3rem;
   margin-top: 1rem;
@@ -60,7 +60,6 @@ main h2 {
 .option {
   padding: 5px 10px;
   border: 1px solid;
-  box-shadow: 3px 3px;
 }
 
 .voters::before {
@@ -106,4 +105,16 @@ main h2 {
 .approve:disabled {
   opacity: 50%;
   box-shadow: none;
+}
+
+.start {
+  display: block;
+  background-color: orange;
+  padding: 10px 20px;
+  border: 1px solid black;
+  box-shadow: 3px 3px black;
+  color: black;
+  font-size: 1.5rem;
+  width: 100%;
+  margin-top: 1rem;
 }

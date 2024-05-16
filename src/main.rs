@@ -301,6 +301,8 @@ mod rooms {
                         }
                     }
 
+                    a."start bold" href={ "/rooms/" (room_vid) "/start" } { "Start Vote" }
+
                     section."voters"
                         hx-ext="sse"
                         sse-connect={ "/rooms/" (room_vid) "/voters" }
@@ -317,7 +319,7 @@ mod rooms {
                                     } @else {
                                         button."approve bold"
                                             hx-post={ "/rooms/" (room_vid) "/voters/" (voter.vid) "/approve" }
-                                            hx-swap="outerHTML" { "Approved" }
+                                            hx-swap="outerHTML" { "Approve" }
                                     }
                                 }
                             }
@@ -557,6 +559,14 @@ mod rooms {
         Ok(page)
     }
 
+    async fn start_vote(
+        conn: Pool<Sqlite>,
+        room_vid: String,
+        admin_code: Option<String>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        Ok("hello")
+    }
+
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -587,16 +597,23 @@ mod rooms {
             .and(warp::cookie::optional("admin_code"))
             .and_then(approve_voter);
 
-        let voter_approved = with_state(conn)
+        let voter_approved = with_state(conn.clone())
             .and(warp::get())
             .and(warp::path!("voters" / String / "approve"))
             .and_then(voter_approved);
+
+        let start_vote = with_state(conn)
+            .and(warp::get())
+            .and(warp::path!("rooms" / String / "start"))
+            .and(warp::cookie::optional("admin_code"))
+            .and_then(start_vote);
 
         room_page
             .or(create_room)
             .or(homepage)
             .or(approve_voter)
             .or(voter_approved)
+            .or(start_vote)
             .or(sse(id_to_count_tx, id_to_voter_tx))
     }
 }
