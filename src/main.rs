@@ -532,12 +532,12 @@ mod rooms {
         conn: Pool<Sqlite>,
         voter_vid: String,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        let visitor = sqlx::query!(r#"SELECT approved FROM voters WHERE vid = ?1"#, voter_vid)
+        let voter = sqlx::query!(r#"SELECT approved FROM voters WHERE vid = ?1"#, voter_vid)
             .fetch_one(&conn)
             .await
             .map_err(|_| warp::reject::custom(VoterNotFound))?;
 
-        let page = if visitor.approved {
+        let page = if voter.approved {
             html! {
                 div."warning regular"
                     style="margin: 0; margin-top: 20px;" {
@@ -564,7 +564,65 @@ mod rooms {
         room_vid: String,
         admin_code: Option<String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        Ok("hello")
+        let room = sqlx::query!(
+            r#"
+        SELECT id, admin_code, name
+        FROM rooms
+        WHERE vid = ?1
+            "#,
+            room_vid
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(RoomNotFound))?;
+
+        let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
+        if !is_admin {
+            return Err(warp::reject::custom(NotAnAdmin));
+        }
+
+        let voters = sqlx::query!(
+            r#"
+        SELECT count(id) as count
+        FROM voters 
+        WHERE room_id = ?1 AND approved = true
+            "#,
+            room.id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(VotersNotFound))?;
+        let voters_count = voters.count.to_formatted_string(&Locale::en);
+
+        let page = with_layout(
+            &format!("Receiving Votes - {}", room.name),
+            html! {
+                link rel="stylesheet" href="/static/css/admin.css";
+                script src="https://unpkg.com/htmx.org@1.9.12" {}
+                script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
+            },
+            html! {
+                h1."bold" { (room.name) }
+
+                div."warning regular" { "Room will close in less than an hour." }
+
+                section."combo" {
+                    div {
+                        p."stat-num bold" { (voters_count) }
+                        p."stat-desc regular" { "approved voters"}
+                    }
+
+                    div {
+                        p."stat-num bold" { "0" }
+                        p."stat-desc regular" { "recorded votes" }
+                    }
+                }
+
+                a."start bold" href={ "/rooms/" (room_vid) "/end" } { "End Vote" }
+            },
+        );
+
+        Ok(page)
     }
 
     pub fn routes(
