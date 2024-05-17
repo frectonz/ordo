@@ -419,6 +419,10 @@ mod rooms {
                             }
                         }
                     }
+
+                    div hx-ext="sse" sse-connect={ "/rooms/" (room_vid) "/listen" } {
+                        div hx-get={ "/voters/" (voter_vid) "/vote" } hx-trigger="sse:start" hx-swap="innerHTML" {}
+                    }
                 },
             )
         };
@@ -445,7 +449,7 @@ mod rooms {
         Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
     }
 
-    async fn voters_sse(
+    async fn voter_sse(
         room_vid: String,
         id_to_senders: VotersStreamIdToSenders,
     ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -464,9 +468,31 @@ mod rooms {
         Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
     }
 
+    async fn room_sse(
+        room_vid: String,
+        id_to_senders: RoomEventsIdToSenders,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        {
+            let mut map = id_to_senders.lock().unwrap();
+            let txs = map.entry(room_vid).or_default();
+            txs.push(tx);
+        }
+
+        let stream = UnboundedReceiverStream::new(rx);
+        let event_stream = stream.map(|e| {
+            dbg!(e);
+            Ok::<sse::Event, Infallible>(sse::Event::default().event("start").data(""))
+        });
+
+        Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
+    }
+
     fn sse(
         id_to_count_tx: CountStreamIdToSenders,
         id_to_voter_tx: VotersStreamIdToSenders,
+        id_to_room_tx: RoomEventsIdToSenders,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let count_sse = warp::path!("rooms" / String / "count")
             .and(with_state(id_to_count_tx))
@@ -474,14 +500,24 @@ mod rooms {
 
         let voter_sse = warp::path!("rooms" / String / "voters")
             .and(with_state(id_to_voter_tx))
-            .and_then(voters_sse);
+            .and_then(voter_sse);
 
-        count_sse.or(voter_sse)
+        let room_sse = warp::path!("rooms" / String / "listen")
+            .and(with_state(id_to_room_tx))
+            .and_then(room_sse);
+
+        count_sse.or(voter_sse).or(room_sse)
+    }
+
+    #[derive(Debug)]
+    enum RoomEvents {
+        Start,
     }
 
     type CountStreamIdToSenders = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>>;
     type VotersStreamIdToSenders =
         Arc<Mutex<HashMap<String, Vec<UnboundedSender<PreEscaped<String>>>>>>;
+    type RoomEventsIdToSenders = Arc<Mutex<HashMap<String, Vec<UnboundedSender<RoomEvents>>>>>;
 
     async fn approve_voter(
         conn: Pool<Sqlite>,
@@ -561,6 +597,7 @@ mod rooms {
 
     async fn start_vote(
         conn: Pool<Sqlite>,
+        id_to_room_tx: RoomEventsIdToSenders,
         room_vid: String,
         admin_code: Option<String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -579,6 +616,17 @@ mod rooms {
         let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
         if !is_admin {
             return Err(warp::reject::custom(NotAnAdmin));
+        }
+
+        {
+            let map = id_to_room_tx.lock().unwrap();
+            let txs = map
+                .get(&room_vid)
+                .ok_or_else(|| warp::reject::custom(CouldNotGetVoterCountStream))?;
+
+            for tx in txs {
+                let _ = tx.send(RoomEvents::Start);
+            }
         }
 
         let voters = sqlx::query!(
@@ -625,11 +673,19 @@ mod rooms {
         Ok(page)
     }
 
+    async fn voting_page(
+        conn: Pool<Sqlite>,
+        vistor_vid: String,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        Ok(format!("voting: {vistor_vid}"))
+    }
+
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let id_to_count_tx: CountStreamIdToSenders = Default::default();
         let id_to_voter_tx: VotersStreamIdToSenders = Default::default();
+        let id_to_rooms_tx: RoomEventsIdToSenders = Default::default();
 
         let homepage = warp::path::end()
             .and(warp::get())
@@ -660,11 +716,17 @@ mod rooms {
             .and(warp::path!("voters" / String / "approve"))
             .and_then(voter_approved);
 
-        let start_vote = with_state(conn)
-            .and(warp::get())
+        let start_vote = warp::get()
+            .and(with_state(conn.clone()))
+            .and(with_state(id_to_rooms_tx.clone()))
             .and(warp::path!("rooms" / String / "start"))
             .and(warp::cookie::optional("admin_code"))
             .and_then(start_vote);
+
+        let voting_page = with_state(conn)
+            .and(warp::get())
+            .and(warp::path!("voters" / String / "vote"))
+            .and_then(voting_page);
 
         room_page
             .or(create_room)
@@ -672,7 +734,8 @@ mod rooms {
             .or(approve_voter)
             .or(voter_approved)
             .or(start_vote)
-            .or(sse(id_to_count_tx, id_to_voter_tx))
+            .or(voting_page)
+            .or(sse(id_to_count_tx, id_to_voter_tx, id_to_rooms_tx))
     }
 }
 
