@@ -118,3 +118,21 @@ main h2 {
   width: 100%;
   margin-top: 1rem;
 }
+
+.vote-options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin-top: 2rem;
+  cursor: pointer;
+}
+
+.vote-option {
+  border: 1px solid black;
+  box-shadow: 3px 3px black;
+  padding: 10px 20px;
+}
+
+.vote-option-active {
+  background-color: bisque;
+}

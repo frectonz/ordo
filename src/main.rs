@@ -385,12 +385,27 @@ mod rooms {
                 }
             }
 
+            let sortable = r#"
+            document.addEventListener('htmx:afterSwap', function() {
+                const voteOptions = document.querySelector('.vote-options');
+
+                if (voteOptions) {
+                    new Sortable(voteOptions, {
+                        animation: 150,
+                        ghostClass: 'vote-option-active'
+                    });
+                }
+            });
+            "#;
+
             with_layout(
                 &format!("Voter - {}", room.name),
                 html! {
                     link rel="stylesheet" href="/static/css/admin.css";
                     script src="https://unpkg.com/htmx.org@1.9.12" {}
                     script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
+                    script src="https://unpkg.com/sortablejs@1.15.2" {}
+                    script { (sortable) }
                 },
                 html! {
                     h1."bold" { (room.name) }
@@ -421,7 +436,9 @@ mod rooms {
                     }
 
                     div hx-ext="sse" sse-connect={ "/rooms/" (room_vid) "/listen" } {
-                        div hx-get={ "/voters/" (voter_vid) "/vote" } hx-trigger="sse:start" hx-swap="innerHTML" {}
+                        div hx-get={ "/voters/" (voter_vid) "/vote" }
+                            hx-trigger="sse:start"
+                            hx-swap="outerHTML" {}
                     }
                 },
             )
@@ -481,10 +498,8 @@ mod rooms {
         }
 
         let stream = UnboundedReceiverStream::new(rx);
-        let event_stream = stream.map(|e| {
-            dbg!(e);
-            Ok::<sse::Event, Infallible>(sse::Event::default().event("start").data(""))
-        });
+        let event_stream = stream
+            .map(|_| Ok::<sse::Event, Infallible>(sse::Event::default().event("start").data("")));
 
         Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
     }
@@ -675,9 +690,33 @@ mod rooms {
 
     async fn voting_page(
         conn: Pool<Sqlite>,
-        vistor_vid: String,
+        voter_vid: String,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        Ok(format!("voting: {vistor_vid}"))
+        let room = sqlx::query!(
+            r#"
+        SELECT options
+        FROM rooms
+        WHERE id = (SELECT room_id FROM voters WHERE vid = ?1)
+            "#,
+            voter_vid
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(RoomNotFound))?;
+
+        let options: Vec<String> = serde_json::from_str(&room.options).unwrap();
+
+        let page = html! {
+            div."vote-options regular" {
+                @for option in options {
+                    div."vote-option" {
+                        (option)
+                    }
+                }
+            }
+        };
+
+        Ok(page)
     }
 
     pub fn routes(
