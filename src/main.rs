@@ -109,10 +109,11 @@ mod rooms {
 
     use crate::{
         rejections::{
-            CouldNotApproveVoter, CouldNotCreateNewRoom, CouldNotCreateNewVoter,
-            CouldNotCreateVote, CouldNotDeserilizeOptions, CouldNotGetCount,
-            CouldNotGetVoterCountStream, CouldNotGetVotersStream, CouldNotStartVote, NotAnAdmin,
-            OptionsMismatch, RoomNotFound, VoterNotFound, VoterNotInRoom, VotersNotFound,
+            CouldNotApproveVoter, CouldNotCountVotes, CouldNotCreateNewRoom,
+            CouldNotCreateNewVoter, CouldNotCreateVote, CouldNotDeserilizeOptions,
+            CouldNotGetCount, CouldNotGetVoterCountStream, CouldNotGetVotersStream,
+            CouldNotStartVote, NotAnAdmin, OptionsMismatch, RoomNotFound, VoterNotFound,
+            VoterNotInRoom, VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -504,10 +505,30 @@ mod rooms {
         Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
     }
 
+    async fn recorded_votes_sse(
+        room_vid: String,
+        id_to_votes: VotesIdToSenders,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        {
+            let mut map = id_to_votes.lock().unwrap();
+            let txs = map.entry(room_vid.clone()).or_default();
+            txs.push(tx);
+        }
+
+        let stream = UnboundedReceiverStream::new(rx);
+        let event_stream =
+            stream.map(|count| Ok::<sse::Event, Infallible>(sse::Event::default().data(count)));
+
+        Ok(warp::sse::reply(sse::keep_alive().stream(event_stream)))
+    }
+
     fn sse(
         id_to_count_tx: CountStreamIdToSenders,
         id_to_voter_tx: VotersStreamIdToSenders,
         id_to_room_tx: RoomEventsIdToSenders,
+        id_to_votes: VotesIdToSenders,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let count_sse = warp::path!("rooms" / String / "count")
             .and(with_state(id_to_count_tx))
@@ -521,7 +542,11 @@ mod rooms {
             .and(with_state(id_to_room_tx))
             .and_then(room_sse);
 
-        count_sse.or(voter_sse).or(room_sse)
+        let recorded_votes_sse = warp::path!("rooms" / String / "votes")
+            .and(with_state(id_to_votes))
+            .and_then(recorded_votes_sse);
+
+        count_sse.or(voter_sse).or(room_sse).or(recorded_votes_sse)
     }
 
     #[derive(Debug)]
@@ -533,6 +558,7 @@ mod rooms {
     type VotersStreamIdToSenders =
         Arc<Mutex<HashMap<String, Vec<UnboundedSender<PreEscaped<String>>>>>>;
     type RoomEventsIdToSenders = Arc<Mutex<HashMap<String, Vec<UnboundedSender<RoomEvents>>>>>;
+    type VotesIdToSenders = Arc<Mutex<HashMap<String, Vec<UnboundedSender<String>>>>>;
 
     async fn approve_voter(
         conn: Pool<Sqlite>,
@@ -669,6 +695,19 @@ mod rooms {
         .map_err(|_| warp::reject::custom(VotersNotFound))?;
         let voters_count = voters.count.to_formatted_string(&Locale::en);
 
+        let votes = sqlx::query!(
+            r#"
+        SELECT count(id) as count
+        FROM votes
+        WHERE room_id = ?1
+            "#,
+            room.id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(CouldNotCountVotes))?;
+        let votes_count = votes.count.to_formatted_string(&Locale::en);
+
         let page = with_layout(
             &format!("Receiving Votes - {}", room.name),
             html! {
@@ -688,7 +727,11 @@ mod rooms {
                     }
 
                     div {
-                        p."stat-num bold" { "0" }
+                        p."stat-num bold"
+                            hx-ext="sse"
+                            sse-connect={ "/rooms/" (room_vid) "/votes" }
+                            hx-swap="innerHTML"
+                            sse-swap="message" { (votes_count) }
                         p."stat-desc regular" { "recorded votes" }
                     }
                 }
@@ -736,6 +779,7 @@ mod rooms {
 
     async fn submit_vote(
         conn: Pool<Sqlite>,
+        id_to_votes: VotesIdToSenders,
         voter_vid: String,
         body: Vec<(String, String)>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -754,7 +798,7 @@ mod rooms {
 
         let room = sqlx::query!(
             r#"
-        SELECT id, options
+        SELECT id, vid, options
         FROM rooms
         WHERE id = (SELECT room_id FROM voters WHERE vid = ?1)
             "#,
@@ -790,6 +834,30 @@ mod rooms {
         .await
         .map_err(|_| warp::reject::custom(CouldNotCreateVote))?;
 
+        {
+            let votes = sqlx::query!(
+                r#"
+            SELECT count(id) as count
+            FROM votes
+            WHERE room_id = ?1
+            "#,
+                room.id
+            )
+            .fetch_one(&conn)
+            .await
+            .map_err(|_| warp::reject::custom(CouldNotCountVotes))?;
+            let votes_count = votes.count.to_formatted_string(&Locale::en);
+
+            let map = id_to_votes.lock().unwrap();
+            let txs = map
+                .get(&room.vid)
+                .ok_or_else(|| warp::reject::custom(CouldNotGetVoterCountStream))?;
+
+            for tx in txs {
+                let _ = tx.send(votes_count.clone());
+            }
+        }
+
         Ok(html! {
             h1."bold" style="margin: 1rem auto;" { "thanks for voting" }
         })
@@ -801,6 +869,7 @@ mod rooms {
         let id_to_count_tx: CountStreamIdToSenders = Default::default();
         let id_to_voter_tx: VotersStreamIdToSenders = Default::default();
         let id_to_rooms_tx: RoomEventsIdToSenders = Default::default();
+        let id_to_votes_tx: VotesIdToSenders = Default::default();
 
         let homepage = warp::path::end()
             .and(warp::get())
@@ -845,6 +914,7 @@ mod rooms {
             .and_then(voting_page);
 
         let submit_vote = with_state(conn)
+            .and(with_state(id_to_votes_tx.clone()))
             .and(warp::post())
             .and(warp::path!("voters" / String / "vote"))
             .and(warp::body::form::<Vec<(String, String)>>())
@@ -858,7 +928,12 @@ mod rooms {
             .or(start_vote)
             .or(voting_page)
             .or(submit_vote)
-            .or(sse(id_to_count_tx, id_to_voter_tx, id_to_rooms_tx))
+            .or(sse(
+                id_to_count_tx,
+                id_to_voter_tx,
+                id_to_rooms_tx,
+                id_to_votes_tx,
+            ))
     }
 }
 
@@ -895,6 +970,7 @@ mod rejections {
         CouldNotGetCount,
         CouldNotStartVote,
         CouldNotSendCount,
+        CouldNotCountVotes,
         CouldNotCreateVote,
         CouldNotApproveVoter,
         CouldNotCreateNewRoom,
@@ -939,6 +1015,9 @@ mod rejections {
         } else if let Some(CouldNotSendCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_SEND_COUNT";
+        } else if let Some(CouldNotCountVotes) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_COUNT_VOTES";
         } else if let Some(CouldNotCreateVote) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_CREATE_VOTE";
