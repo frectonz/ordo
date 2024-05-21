@@ -111,8 +111,8 @@ mod rooms {
         rejections::{
             CouldNotApproveVoter, CouldNotCreateNewRoom, CouldNotCreateNewVoter,
             CouldNotDeserilizeOptions, CouldNotGetCount, CouldNotGetVoterCountStream,
-            CouldNotGetVotersStream, NotAnAdmin, RoomNotFound, VoterNotFound, VoterNotInRoom,
-            VotersNotFound,
+            CouldNotGetVotersStream, CouldNotStartVote, NotAnAdmin, RoomNotFound, VoterNotFound,
+            VoterNotInRoom, VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -644,6 +644,18 @@ mod rooms {
             }
         }
 
+        sqlx::query!(
+            r#"
+        UPDATE rooms
+        SET started = TRUE
+        WHERE id = ?1
+            "#,
+            room.id
+        )
+        .execute(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(CouldNotStartVote))?;
+
         let voters = sqlx::query!(
             r#"
         SELECT count(id) as count
@@ -830,6 +842,7 @@ mod rejections {
         VoterNotInRoom,
         VotersNotFound,
         CouldNotGetCount,
+        CouldNotStartVote,
         CouldNotSendCount,
         CouldNotApproveVoter,
         CouldNotCreateNewRoom,
@@ -865,6 +878,9 @@ mod rejections {
         } else if let Some(CouldNotGetCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_GET_COUNT";
+        } else if let Some(CouldNotStartVote) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_START_VOTE";
         } else if let Some(CouldNotSendCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_SEND_COUNT";
