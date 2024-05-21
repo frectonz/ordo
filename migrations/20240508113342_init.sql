@@ -21,3 +21,12 @@ CREATE TABLE IF NOT EXISTS voters
 );
 
 CREATE UNIQUE INDEX idx_voters_vid ON voters (vid);
+
+CREATE TABLE IF NOT EXISTS votes
+(
+    id         INTEGER PRIMARY KEY NOT NULL,
+    options    TEXT                NOT NULL,
+    room_id    INTEGER             NOT NULL REFERENCES rooms(id),
+    voter_id   INTEGER             NOT NULL REFERENCES voters(id),
+    created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

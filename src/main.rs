@@ -110,9 +110,9 @@ mod rooms {
     use crate::{
         rejections::{
             CouldNotApproveVoter, CouldNotCreateNewRoom, CouldNotCreateNewVoter,
-            CouldNotDeserilizeOptions, CouldNotGetCount, CouldNotGetVoterCountStream,
-            CouldNotGetVotersStream, CouldNotStartVote, NotAnAdmin, RoomNotFound, VoterNotFound,
-            VoterNotInRoom, VotersNotFound,
+            CouldNotCreateVote, CouldNotDeserilizeOptions, CouldNotGetCount,
+            CouldNotGetVoterCountStream, CouldNotGetVotersStream, CouldNotStartVote, NotAnAdmin,
+            OptionsMismatch, RoomNotFound, VoterNotFound, VoterNotInRoom, VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -739,7 +739,57 @@ mod rooms {
         voter_vid: String,
         body: Vec<(String, String)>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        dbg!(body);
+        let options = body
+            .into_iter()
+            .fold(None, |options, (key, value)| match key.as_str() {
+                "option" => match options {
+                    None => Some(vec![value]),
+                    Some(mut opts) => {
+                        opts.push(value);
+                        Some(opts)
+                    }
+                },
+                _ => options,
+            });
+
+        let room = sqlx::query!(
+            r#"
+        SELECT id, options
+        FROM rooms
+        WHERE id = (SELECT room_id FROM voters WHERE vid = ?1)
+            "#,
+            voter_vid
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(RoomNotFound))?;
+
+        let mut the_options: Vec<String> = serde_json::from_str(&room.options).unwrap();
+        the_options.sort();
+
+        let options = options.ok_or_else(|| warp::reject::not_found())?;
+        let mut user_options = options.clone();
+        user_options.sort();
+
+        if the_options != user_options {
+            return Err(warp::reject::custom(OptionsMismatch));
+        }
+
+        let options = serde_json::to_string(&options).unwrap();
+
+        sqlx::query!(
+            r#"
+        INSERT INTO votes (options, room_id, voter_id)
+        SELECT ?1, ?2, id FROM voters WHERE vid = ?3
+            "#,
+            options,
+            room.id,
+            voter_vid
+        )
+        .execute(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(CouldNotCreateVote))?;
+
         Ok(html! {
             h1."bold" style="margin: 1rem auto;" { "thanks for voting" }
         })
@@ -841,9 +891,11 @@ mod rejections {
         VoterNotFound,
         VoterNotInRoom,
         VotersNotFound,
+        OptionsMismatch,
         CouldNotGetCount,
         CouldNotStartVote,
         CouldNotSendCount,
+        CouldNotCreateVote,
         CouldNotApproveVoter,
         CouldNotCreateNewRoom,
         CouldNotCreateNewVoter,
@@ -875,6 +927,9 @@ mod rejections {
         } else if let Some(VotersNotFound) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "VOTERS_NOT_FOUND";
+        } else if let Some(OptionsMismatch) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "OPTIONS_MISMATCH";
         } else if let Some(CouldNotGetCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_GET_COUNT";
@@ -884,6 +939,9 @@ mod rejections {
         } else if let Some(CouldNotSendCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_SEND_COUNT";
+        } else if let Some(CouldNotCreateVote) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_CREATE_VOTE";
         } else if let Some(CouldNotApproveVoter) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_APPROVE_VOTER";
