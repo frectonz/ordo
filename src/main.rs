@@ -707,16 +707,30 @@ mod rooms {
         let options: Vec<String> = serde_json::from_str(&room.options).unwrap();
 
         let page = html! {
-            div."vote-options regular" {
+            form."vote-options regular" hx-post={ "/voters/" (voter_vid) "/vote" } hx-swap="outerHTML" {
                 @for option in options {
                     div."vote-option" {
                         (option)
+                        input type="hidden" name="option" value=(option) {}
                     }
                 }
+
+                button."bold vote" type="submit" { "Submit Vote" }
             }
         };
 
         Ok(page)
+    }
+
+    async fn submit_vote(
+        conn: Pool<Sqlite>,
+        voter_vid: String,
+        body: Vec<(String, String)>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        dbg!(body);
+        Ok(html! {
+            h1."bold" style="margin: 1rem auto;" { "thanks for voting" }
+        })
     }
 
     pub fn routes(
@@ -731,7 +745,8 @@ mod rooms {
             .and(with_state(conn.clone()))
             .and_then(homepage);
 
-        let create_room = warp::post()
+        let create_room = warp::path::end()
+            .and(warp::post())
             .and(with_state(conn.clone()))
             .and(warp::body::form::<Vec<(String, String)>>())
             .and_then(create_room);
@@ -762,10 +777,16 @@ mod rooms {
             .and(warp::cookie::optional("admin_code"))
             .and_then(start_vote);
 
-        let voting_page = with_state(conn)
+        let voting_page = with_state(conn.clone())
             .and(warp::get())
             .and(warp::path!("voters" / String / "vote"))
             .and_then(voting_page);
+
+        let submit_vote = with_state(conn)
+            .and(warp::post())
+            .and(warp::path!("voters" / String / "vote"))
+            .and(warp::body::form::<Vec<(String, String)>>())
+            .and_then(submit_vote);
 
         room_page
             .or(create_room)
@@ -774,6 +795,7 @@ mod rooms {
             .or(voter_approved)
             .or(start_vote)
             .or(voting_page)
+            .or(submit_vote)
             .or(sse(id_to_count_tx, id_to_voter_tx, id_to_rooms_tx))
     }
 }
