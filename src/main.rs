@@ -112,8 +112,8 @@ mod rooms {
             CouldNotApproveVoter, CouldNotCountVotes, CouldNotCreateNewRoom,
             CouldNotCreateNewVoter, CouldNotCreateVote, CouldNotDeserilizeOptions,
             CouldNotGetCount, CouldNotGetVoterCountStream, CouldNotGetVotersStream,
-            CouldNotStartVote, NotAnAdmin, OptionsMismatch, RoomNotFound, VoterNotFound,
-            VoterNotInRoom, VotersNotFound,
+            CouldNotGetVotes, CouldNotStartVote, NotAnAdmin, OptionsMismatch, RoomNotFound,
+            VoterNotFound, VoterNotInRoom, VotersNotFound,
         },
         views::with_layout,
         with_state,
@@ -552,6 +552,7 @@ mod rooms {
     #[derive(Debug)]
     enum RoomEvents {
         Start,
+        End,
     }
 
     type CountStreamIdToSenders = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<String>>>>>;
@@ -869,7 +870,88 @@ mod rooms {
         room_vid: String,
         admin_code: Option<String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        Ok("hello")
+        let room = sqlx::query!(
+            r#"
+        SELECT id, admin_code, name
+        FROM rooms
+        WHERE vid = ?1
+            "#,
+            room_vid
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(RoomNotFound))?;
+
+        let is_admin = admin_code.map(|c| c == room.admin_code).unwrap_or(false);
+        if !is_admin {
+            return Err(warp::reject::custom(NotAnAdmin));
+        }
+
+        let votes = sqlx::query!(
+            r#"
+        SELECT options
+        FROM votes
+        WHERE room_id = ?1
+            "#,
+            room.id
+        )
+        .fetch_all(&conn)
+        .await
+        .map_err(|_| warp::reject::custom(CouldNotGetVotes))?;
+
+        let scores = votes
+            .into_iter()
+            .map(|r| r.options)
+            .map(|r| serde_json::from_str::<Vec<String>>(&r).unwrap())
+            .fold(HashMap::<String, usize>::new(), |map, options| {
+                let options_len = options.len();
+                options
+                    .into_iter()
+                    .enumerate()
+                    .fold(map, |mut map, (idx, choice)| {
+                        let curr_score = options_len - idx;
+                        map.entry(choice)
+                            .and_modify(|score| *score += curr_score)
+                            .or_insert(curr_score);
+                        map
+                    })
+            });
+
+        let mut scores = scores.into_iter().collect::<Vec<_>>();
+        scores.sort_by_key(|(_, score)| *score);
+        scores.reverse();
+
+        {
+            let map = id_to_room_tx.lock().unwrap();
+            let txs = map
+                .get(&room_vid)
+                .ok_or_else(|| warp::reject::custom(CouldNotGetVoterCountStream))?;
+
+            for tx in txs {
+                let _ = tx.send(RoomEvents::End);
+            }
+        }
+
+        let page = html! {
+            table."regular" {
+                thead."bold" {
+                    tr {
+                        td { "Option" }
+                        td { "Score" }
+                    }
+                }
+                tbody {
+                    @for (option, score) in scores {
+                        tr {
+                            td { (option) }
+                            td."bold" { (score.to_formatted_string(&Locale::en)) }
+                        }
+                    }
+                }
+            }
+        };
+
+        Ok(page)
     }
 
     pub fn routes(
@@ -984,6 +1066,7 @@ mod rejections {
         VoterNotInRoom,
         VotersNotFound,
         OptionsMismatch,
+        CouldNotGetVotes,
         CouldNotGetCount,
         CouldNotStartVote,
         CouldNotSendCount,
@@ -1023,6 +1106,9 @@ mod rejections {
         } else if let Some(OptionsMismatch) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "OPTIONS_MISMATCH";
+        } else if let Some(CouldNotGetVotes) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "COULD_NOT_GET_VOTES";
         } else if let Some(CouldNotGetCount) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "COULD_NOT_GET_COUNT";

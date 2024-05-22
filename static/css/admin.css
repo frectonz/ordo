@@ -150,3 +150,25 @@ main h2 {
   margin-top: 1rem;
   text-align: left;
 }
+
+table {
+  border: 1px solid;
+  border-collapse: collapse;
+  box-shadow: 3px 3px black;
+  margin: 1rem 0;
+  width: 100%;
+}
+
+thead {
+  background-color: bisque;
+  border: 1px solid black;
+}
+
+td {
+  border: 1px solid;
+  padding: 0.5rem;
+}
+
+td:nth-child(2) {
+  text-align: right;
+}
