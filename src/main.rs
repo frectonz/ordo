@@ -673,7 +673,7 @@ mod rooms {
         sqlx::query!(
             r#"
         UPDATE rooms
-        SET started = TRUE
+        SET status = 1
         WHERE id = ?1
             "#,
             room.id
@@ -736,7 +736,7 @@ mod rooms {
                     }
                 }
 
-                a."start bold" href={ "/rooms/" (room_vid) "/end" } { "End Vote" }
+                button."start bold" hx-post={ "/rooms/" (room_vid) "/end" } hx-swap="outerHTML" { "End Vote" }
             },
         );
 
@@ -863,6 +863,15 @@ mod rooms {
         })
     }
 
+    async fn end_vote(
+        conn: Pool<Sqlite>,
+        id_to_room_tx: RoomEventsIdToSenders,
+        room_vid: String,
+        admin_code: Option<String>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        Ok("hello")
+    }
+
     pub fn routes(
         conn: Pool<Sqlite>,
     ) -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
@@ -913,12 +922,19 @@ mod rooms {
             .and(warp::path!("voters" / String / "vote"))
             .and_then(voting_page);
 
-        let submit_vote = with_state(conn)
+        let submit_vote = with_state(conn.clone())
             .and(with_state(id_to_votes_tx.clone()))
             .and(warp::post())
             .and(warp::path!("voters" / String / "vote"))
             .and(warp::body::form::<Vec<(String, String)>>())
             .and_then(submit_vote);
+
+        let end_vote = warp::post()
+            .and(with_state(conn.clone()))
+            .and(with_state(id_to_rooms_tx.clone()))
+            .and(warp::path!("rooms" / String / "end"))
+            .and(warp::cookie::optional("admin_code"))
+            .and_then(end_vote);
 
         room_page
             .or(create_room)
@@ -926,6 +942,7 @@ mod rooms {
             .or(approve_voter)
             .or(voter_approved)
             .or(start_vote)
+            .or(end_vote)
             .or(voting_page)
             .or(submit_vote)
             .or(sse(

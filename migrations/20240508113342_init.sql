@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS rooms
     admin_code TEXT                NOT NULL,
     name       TEXT                NOT NULL,
     options    TEXT                NOT NULL,
-    started    BOOLEAN             NOT NULL DEFAULT FALSE,
+    status     INTEGER             NOT NULL DEFAULT 0, -- 0 = waiting, 1 = started, 2 = ended
     created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
