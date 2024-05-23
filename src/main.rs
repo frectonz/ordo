@@ -64,8 +64,187 @@ mod statics {
     }
 }
 
+mod homepage {
+    use crate::{rejections, utils, views};
+
+    use maud::{html, Markup};
+
+    struct Homepage {
+        room_count: i32,
+        voter_count: i32,
+        vote_count: i32,
+    }
+
+    pub async fn handler(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let rooms = sqlx::query!(r#"SELECT count(id) as count FROM rooms"#)
+            .fetch_one(&conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("error while counting rooms: {e}");
+                warp::reject::custom(rejections::InternalServerError)
+            })?;
+
+        let voters = sqlx::query!(r#"SELECT count(id) as count FROM voters"#)
+            .fetch_one(&conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("error while counting voters: {e}");
+                warp::reject::custom(rejections::InternalServerError)
+            })?;
+
+        let votes = sqlx::query!(r#"SELECT count(id) as count FROM votes"#)
+            .fetch_one(&conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("error while counting votes: {e}");
+                warp::reject::custom(rejections::InternalServerError)
+            })?;
+
+        Ok(view(Homepage {
+            room_count: rooms.count,
+            voter_count: voters.count,
+            vote_count: votes.count,
+        }))
+    }
+
+    fn view(data: Homepage) -> impl warp::Reply {
+        views::page(
+            "Home",
+            html! {
+                section."two-cols" {
+                    div."center" {
+                        div."w-500 grid gap-lg" {
+                            (create_room_form())
+                            (general_stats(&data))
+                        }
+                    }
+                    div."center" {
+                        img."w-500" src="/static/img/vote.svg";
+                    }
+                }
+            },
+        )
+    }
+
+    fn create_room_form() -> Markup {
+        html! {
+            form."w-full grid gap-md" hx-post="/rooms" hx-target="main" hx-swap="innerHTML" {
+                div."grid gap-sm" {
+                    label."text-medium" { "NAME" }
+                    input."input-text" name="name" required="true" min="2" placeholder="my super cool vote" {}
+                }
+
+                div."grid gap-sm" {
+                    label."text-medium" { "OPTIONS" }
+
+                    div."grid gap-sm" {
+                        @for _ in 0..3 {
+                            div."flex gap-sm" {
+                                input."input-text strech" name="option" required="true" placeholder="a choice" {}
+                                button."button w-fit" type="button" { "DELETE" }
+                            }
+                        }
+                    }
+
+                    button."button w-fit" id="addOption" type="button" { "ADD OPTION" }
+                }
+
+                button."button" type="submit" { "CREATE ROOM" }
+            }
+        }
+    }
+
+    fn general_stats(data: &Homepage) -> Markup {
+        let room_count = utils::format_num(data.room_count);
+        let room_label = utils::pluralize(data.room_count, "room", "rooms");
+
+        let voter_count = utils::format_num(data.voter_count);
+        let voter_label = utils::pluralize(data.voter_count, "voter", "voters");
+
+        let vote_count = utils::format_num(data.vote_count);
+        let vote_label = utils::pluralize(data.vote_count, "vote", "votes");
+
+        html! {
+            div {
+                p."text-center" { span."bold" { (room_count)  } " " (room_label)  " created so far" }
+                p."text-center" { span."bold" { (voter_count) } " " (voter_label) " created so far" }
+                p."text-center" { span."bold" { (vote_count)  } " " (vote_label)  " created so far" }
+            }
+        }
+    }
+}
+
+mod utils {
+    use num_format::{Locale, ToFormattedString};
+
+    pub fn format_num(num: i32) -> String {
+        num.to_formatted_string(&Locale::en)
+    }
+
+    pub fn pluralize(num: i32, singular: &str, plural: &str) -> String {
+        if num == 1 { singular } else { plural }.to_owned()
+    }
+}
+
 mod views {
     use maud::{html, Markup, DOCTYPE};
+
+    fn font() -> Markup {
+        html! {
+            link rel="preconnect" href="https://fonts.googleapis.com";
+            link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
+            link href="https://fonts.googleapis.com/css2?family=Darker+Grotesque:wght@300..900&display=swap" rel="stylesheet";
+        }
+    }
+
+    fn htmx() -> Markup {
+        html! {
+            script src="https://unpkg.com/htmx.org@1.9.12" {}
+            script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
+        }
+    }
+
+    fn css() -> Markup {
+        html! {
+            link rel="stylesheet" href="/static/css/style.css";
+        }
+    }
+
+    fn header() -> Markup {
+        html! {
+            header."header" {
+                h1."header--logo" { a href="/" { "ORDO" } }
+            }
+        }
+    }
+
+    fn main(body: Markup) -> Markup {
+        html! {
+            main."main" { (body) }
+        }
+    }
+
+    pub fn page(title: &str, body: Markup) -> Markup {
+        html! {
+            (DOCTYPE)
+            head {
+                meta charset="utf-8";
+
+                (font())
+                (htmx())
+                (css())
+
+                title { (format!("ORDO - {title}")) }
+            }
+
+            body {
+                (header())
+                (main(body))
+            }
+        }
+    }
 
     pub fn with_layout(title: &str, head: Markup, body: Markup) -> Markup {
         html! {
@@ -79,7 +258,7 @@ mod views {
 
                 link rel="stylesheet" href="/static/css/global.css";
                 (head)
-                title { (format!("{title} - ORDO")) }
+                title { (format!("ORDO - {title}")) }
             }
 
             body {
@@ -1078,7 +1257,8 @@ mod rejections {
         CouldNotGetVoterCountTx,
         CouldNotGetVotersStream,
         CouldNotDeserilizeOptions,
-        CouldNotGetVoterCountStream
+        CouldNotGetVoterCountStream,
+        InternalServerError
     );
 
     pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
