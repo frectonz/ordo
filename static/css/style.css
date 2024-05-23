@@ -1,0 +1,157 @@
+:root {
+  --primary-color: orange;
+  --secondary-color: bisque;
+}
+
+* {
+  margin: 0;
+  box-sizing: border-box;
+
+  font-family: "Darker Grotesque", sans-serif;
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+}
+
+body {
+  background-color: var(--primary-color);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.header {
+  top: 0;
+  position: sticky;
+  width: 100vw;
+  padding: 1rem;
+  border-bottom: 2px solid black;
+  box-shadow: 2px 2px white,
+    4px 4px black,
+    6px 6px white,
+    8px 8px black,
+    10px 10px white,
+    12px 12px black;
+  background-color: var(--primary-color);
+}
+
+.header--logo {
+  font-weight: 900;
+  font-size: 2rem;
+}
+
+.main {
+  height: 100vh;
+  padding: 1rem;
+}
+
+.two-cols {
+  gap: 2rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 1000px) {
+  .two-cols {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .two-cols>div:nth-child(2) {
+    display: none;
+  }
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.gap-lg {
+  gap: 1.5rem;
+}
+
+.gap-md {
+  gap: 1rem;
+}
+
+.gap-sm {
+  gap: 0.5rem;
+}
+
+.flex {
+  display: flex;
+}
+
+.strech {
+  flex: 1;
+}
+
+.w-500 {
+  max-width: 100%;
+  width: 500px;
+}
+
+.w-800 {
+  max-width: 100%;
+  width: 800px;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.w-fit {
+  width: fit-content;
+}
+
+.h-full {
+  height: 100%;
+}
+
+.text-lg {
+  font-size: 3rem;
+  font-weight: 600;
+}
+
+.text-md {
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.text-sm {
+  font-size: 1rem;
+}
+
+.bold {
+  font-weight: 600;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.input-text {
+  background-color: transparent;
+  border: 1px solid black;
+  font-size: 1.5rem;
+  padding: 0.3rem 0.8rem;
+  box-shadow: 3px 3px black;
+}
+
+.button {
+  background-color: transparent;
+  border: 1px solid black;
+  font-size: 1.3rem;
+  padding: 0.3rem 0.8rem;
+  box-shadow: 3px 3px black;
+  font-weight: 600;
+}

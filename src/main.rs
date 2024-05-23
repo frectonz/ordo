@@ -16,10 +16,13 @@ async fn main() -> color_eyre::Result<()> {
     let db = env::var("DATABASE_URL")?;
     let conn: Pool<Sqlite> = Pool::connect(&db).await?;
 
-    let home = rooms::routes(conn);
+    let _home = rooms::routes(conn.clone());
+    let routes = routes(conn);
     let static_files = warp::path("static").and(statics::routes());
 
-    let routes = static_files.or(home).recover(rejections::handle_rejection);
+    let routes = static_files
+        .or(routes)
+        .recover(rejections::handle_rejection);
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 
     Ok(())
@@ -64,10 +67,17 @@ mod statics {
     }
 }
 
+pub fn routes(
+    conn: sqlx::Pool<sqlx::Sqlite>,
+) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+    homepage::route(conn)
+}
+
 mod homepage {
-    use crate::{rejections, utils, views};
+    use crate::{rejections, urls, utils, views, with_state};
 
     use maud::{html, Markup};
+    use warp::Filter;
 
     struct Homepage {
         room_count: i32,
@@ -75,9 +85,16 @@ mod homepage {
         vote_count: i32,
     }
 
-    pub async fn handler(
+    pub fn route(
         conn: sqlx::Pool<sqlx::Sqlite>,
-    ) -> Result<impl warp::Reply, warp::Rejection> {
+    ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path::end()
+            .and(warp::get())
+            .and(with_state(conn))
+            .and_then(handler)
+    }
+
+    async fn handler(conn: sqlx::Pool<sqlx::Sqlite>) -> Result<impl warp::Reply, warp::Rejection> {
         let rooms = sqlx::query!(r#"SELECT count(id) as count FROM rooms"#)
             .fetch_one(&conn)
             .await
@@ -113,7 +130,7 @@ mod homepage {
         views::page(
             "Home",
             html! {
-                section."two-cols" {
+                section."two-cols h-full" {
                     div."center" {
                         div."w-500 grid gap-lg" {
                             (create_room_form())
@@ -130,20 +147,20 @@ mod homepage {
 
     fn create_room_form() -> Markup {
         html! {
-            form."w-full grid gap-md" hx-post="/rooms" hx-target="main" hx-swap="innerHTML" {
+            form."w-full grid gap-md" hx-post=(urls::rooms_url()) hx-target="main" hx-swap="innerHTML" {
                 div."grid gap-sm" {
-                    label."text-medium" { "NAME" }
+                    label."text-md" { "NAME" }
                     input."input-text" name="name" required="true" min="2" placeholder="my super cool vote" {}
                 }
 
                 div."grid gap-sm" {
-                    label."text-medium" { "OPTIONS" }
+                    label."text-md" { "OPTIONS" }
 
-                    div."grid gap-sm" {
+                    div."grid gap-sm" id="options" {
                         @for _ in 0..3 {
                             div."flex gap-sm" {
                                 input."input-text strech" name="option" required="true" placeholder="a choice" {}
-                                button."button w-fit" type="button" { "DELETE" }
+                                button."button w-fit delete" type="button" { "DELETE" }
                             }
                         }
                     }
@@ -151,7 +168,7 @@ mod homepage {
                     button."button w-fit" id="addOption" type="button" { "ADD OPTION" }
                 }
 
-                button."button" type="submit" { "CREATE ROOM" }
+                button."button w-full" type="submit" { "CREATE ROOM" }
             }
         }
     }
@@ -168,9 +185,9 @@ mod homepage {
 
         html! {
             div {
-                p."text-center" { span."bold" { (room_count)  } " " (room_label)  " created so far" }
-                p."text-center" { span."bold" { (voter_count) } " " (voter_label) " created so far" }
-                p."text-center" { span."bold" { (vote_count)  } " " (vote_label)  " created so far" }
+                p."text-center text-sm" { span."bold" { (room_count)  } " " (room_label)  " created so far" }
+                p."text-center text-sm" { span."bold" { (voter_count) } " " (voter_label) " created so far" }
+                p."text-center text-sm" { span."bold" { (vote_count)  } " " (vote_label)  " created so far" }
             }
         }
     }
@@ -185,6 +202,12 @@ mod utils {
 
     pub fn pluralize(num: i32, singular: &str, plural: &str) -> String {
         if num == 1 { singular } else { plural }.to_owned()
+    }
+}
+
+mod urls {
+    pub fn rooms_url() -> String {
+        "/rooms".to_owned()
     }
 }
 
@@ -212,10 +235,16 @@ mod views {
         }
     }
 
+    fn js() -> Markup {
+        html! {
+            script src="/static/js/main.js" {}
+        }
+    }
+
     fn header() -> Markup {
         html! {
             header."header" {
-                h1."header--logo" { a href="/" { "ORDO" } }
+                a."header--logo" href="/" { "ORDO" }
             }
         }
     }
@@ -235,6 +264,7 @@ mod views {
                 (font())
                 (htmx())
                 (css())
+                (js())
 
                 title { (format!("ORDO - {title}")) }
             }
