@@ -196,6 +196,8 @@ mod homepage {
 }
 
 mod room {
+    use std::time::Duration;
+
     use crate::{
         names,
         rejections::{self, EmptyName, EmptyOption, NoOptions, NotRoomAdmin},
@@ -273,6 +275,34 @@ mod room {
             warp::reject::custom(rejections::InternalServerError)
         })?
         .last_insert_rowid();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+
+            let res = sqlx::query!(
+                r#"
+            BEGIN TRANSACTION;
+
+            DELETE FROM new_votes
+            WHERE room_id = ?1;
+
+            DELETE FROM new_voters
+            WHERE room_id = ?1;
+
+            DELETE FROM new_rooms
+            WHERE id = ?1;
+
+            COMMIT;
+                "#,
+                room_id,
+                room_id,
+                room_id
+            )
+            .execute(&conn)
+            .await;
+
+            tracing::debug!("delete room result: {res:?}");
+        });
 
         let set_cookie_value = format!(
             "{}={admin_code}; HttpOnly; Max-Age=3600; Secure",

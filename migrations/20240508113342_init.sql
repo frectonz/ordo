@@ -42,3 +42,20 @@ CREATE TABLE IF NOT EXISTS new_rooms
     status     INTEGER             NOT NULL DEFAULT 0, -- 0 = waiting, 1 = started, 2 = ended
     created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS new_voters
+(
+    id         INTEGER PRIMARY KEY NOT NULL,
+    approved   BOOLEAN             NOT NULL DEFAULT 0,
+    room_id    INTEGER             NOT NULL REFERENCES new_rooms(id),
+    created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS new_votes
+(
+    id         INTEGER PRIMARY KEY NOT NULL,
+    options    TEXT                NOT NULL,
+    room_id    INTEGER             NOT NULL REFERENCES new_rooms(id),
+    voter_id   INTEGER             NOT NULL REFERENCES new_voters(id),
+    created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
