@@ -1,5 +1,6 @@
 use std::env;
 
+use events::Broadcasters;
 use sqlx::{Pool, Sqlite};
 use tracing_subscriber::fmt::format::FmtSpan;
 use warp::Filter;
@@ -15,10 +16,13 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     let db = env::var("DATABASE_URL")?;
+
     let conn: Pool<Sqlite> = Pool::connect(&db).await?;
+    let broadcasters = Broadcasters::new();
 
     let _home = rooms::routes(conn.clone());
-    let routes = routes(conn);
+
+    let routes = routes(conn, broadcasters);
     let static_files = warp::path("static").and(statics::routes());
 
     let routes = static_files
@@ -71,8 +75,11 @@ mod statics {
 
 pub fn routes(
     conn: sqlx::Pool<sqlx::Sqlite>,
+    broadcasters: Broadcasters,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    homepage::route(conn.clone()).or(room::route(conn))
+    homepage::route(conn.clone())
+        .or(room::route(conn.clone()))
+        .or(events::route(conn, broadcasters))
 }
 
 mod homepage {
@@ -97,7 +104,7 @@ mod homepage {
     }
 
     async fn handler(conn: sqlx::Pool<sqlx::Sqlite>) -> Result<impl warp::Reply, warp::Rejection> {
-        let rooms = sqlx::query!(r#"SELECT count(id) as count FROM rooms"#)
+        let rooms = sqlx::query!(r#"SELECT count(id) as count FROM new_rooms"#)
             .fetch_one(&conn)
             .await
             .map_err(|e| {
@@ -105,7 +112,7 @@ mod homepage {
                 warp::reject::custom(rejections::InternalServerError)
             })?;
 
-        let voters = sqlx::query!(r#"SELECT count(id) as count FROM voters"#)
+        let voters = sqlx::query!(r#"SELECT count(id) as count FROM new_voters"#)
             .fetch_one(&conn)
             .await
             .map_err(|e| {
@@ -113,7 +120,7 @@ mod homepage {
                 warp::reject::custom(rejections::InternalServerError)
             })?;
 
-        let votes = sqlx::query!(r#"SELECT count(id) as count FROM votes"#)
+        let votes = sqlx::query!(r#"SELECT count(id) as count FROM new_votes"#)
             .fetch_one(&conn)
             .await
             .map_err(|e| {
@@ -408,7 +415,7 @@ mod room {
 
                 section."two-cols" {
                     div."card card--secondary stat" {
-                        p."stat__num" hx-swap="innerHTML" sse-swap=(names::voter_count_event()) { (voter_count) }
+                        p."stat__num" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT) { (voter_count) }
                         p."stat__desc" { (voter_label) " in room" }
                     }
 
@@ -424,7 +431,7 @@ mod room {
 
                 button."button text-lg align-left" hx-put=(names::start_vote_url(room.id)) hx-target="main" hx-swap="innerHTML" { "START VOTE" }
 
-                section."grid gap-md" hx-swap="beforeend" sse-swap=(names::new_voter_event()) {
+                section."grid gap-md" hx-swap="beforeend" sse-swap=(names::NEW_VOTER_EVENT) {
                     h2."text-md" { "Voters" }
 
                     @for voter in room.voters {
@@ -441,6 +448,150 @@ mod room {
                 }
             }
         }
+    }
+}
+
+mod events {
+    use std::{collections::HashMap, convert::Infallible, sync::Arc};
+
+    use tokio::sync::{
+        broadcast::{self, Sender},
+        Mutex,
+    };
+    use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+    use warp::{
+        filters::sse::{self, Event},
+        Filter,
+    };
+
+    use crate::{names, rejections::InternalServerError, utils, with_state};
+
+    #[derive(Clone, Debug)]
+    pub enum RoomEvents {
+        NewVoterCount(i32),
+        NewVoter(i64),
+        VoterApproved(i64),
+        NewVoteCount(i64),
+        VoteStarted,
+        VoteEnded,
+    }
+
+    #[derive(Clone, Default)]
+    pub struct Broadcasters {
+        map: Arc<Mutex<HashMap<i64, Sender<RoomEvents>>>>,
+    }
+
+    impl Broadcasters {
+        pub fn new() -> Self {
+            Default::default()
+        }
+
+        pub async fn send_event(&self, room_id: i64, event: RoomEvents) {
+            let mut map = self.map.lock().await;
+            let tx = map
+                .entry(room_id)
+                .or_insert_with(|| broadcast::channel(16).0);
+
+            let _ = tx
+                .send(event)
+                .map_err(|e| tracing::error!("failed to send event: {e}"));
+        }
+
+        async fn get_stream(&self, room_id: i64) -> BroadcastStream<RoomEvents> {
+            let mut map = self.map.lock().await;
+            let tx = map
+                .entry(room_id)
+                .or_insert_with(|| broadcast::channel(16).0);
+            let rx = tx.subscribe();
+
+            BroadcastStream::new(rx)
+        }
+    }
+
+    pub fn route(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
+    ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        warp::path!("rooms" / i64 / "listen")
+            .and(with_state(conn))
+            .and(with_state(broadcasters))
+            .and(warp::cookie::optional(names::ROOM_ADMIN_COOKIE_NAME))
+            .and(warp::cookie::optional(names::VOTER_COOKIE_NAME))
+            .and_then(handler)
+    }
+
+    async fn handler(
+        room_id: i64,
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
+        admin_code: Option<String>,
+        voter_code: Option<String>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let is_admin = match admin_code {
+            Some(admin_code) => {
+                let room = sqlx::query!(
+                    r#"
+                SELECT admin_code
+                FROM new_rooms
+                WHERE id = ?1
+                    "#,
+                    room_id
+                )
+                .fetch_one(&conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("error while getting admin code: {e}");
+                    warp::reject::custom(InternalServerError)
+                })?;
+
+                admin_code == room.admin_code
+            }
+            None => false,
+        };
+
+        let is_voter = match voter_code {
+            Some(voter_code) => sqlx::query!(
+                r#"
+            SELECT id
+            FROM new_voters
+            WHERE voter_code = ?1
+                "#,
+                voter_code
+            )
+            .fetch_optional(&conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("error while getting admin code: {e}");
+                warp::reject::custom(InternalServerError)
+            })?
+            .is_some(),
+            None => false,
+        };
+
+        let stream = broadcasters.get_stream(room_id).await;
+        let stream = stream
+            .filter_map(|event| match event {
+                Ok(event) => Some(event),
+                Err(error) => {
+                    tracing::error!("error while receiving events: {error}");
+                    None
+                }
+            })
+            .map(move |event| {
+                use RoomEvents::*;
+                match (event, is_admin, is_voter) {
+                    (NewVoterCount(count), true, false) | (NewVoterCount(count), false, true) => {
+                        Event::default()
+                            .event(names::NEW_VOTER_EVENT)
+                            .data(utils::format_num(count))
+                    }
+
+                    _ => Event::default().event(names::PING_EVENT),
+                }
+            })
+            .map(|event| Ok::<_, Infallible>(event));
+
+        Ok(sse::reply(stream))
     }
 }
 
@@ -482,15 +633,12 @@ mod names {
         format!("/voters/{voter_id}/approve")
     }
 
-    pub fn voter_count_event() -> String {
-        "voter-count".to_string()
-    }
-
-    pub fn new_voter_event() -> String {
-        "voter".to_string()
-    }
+    pub const VOTER_COUNT_EVENT: &str = "voter-count";
+    pub const NEW_VOTER_EVENT: &str = "voter";
+    pub const PING_EVENT: &str = "ping";
 
     pub const ROOM_ADMIN_COOKIE_NAME: &str = "admin_code";
+    pub const VOTER_COOKIE_NAME: &str = "voter_code";
 }
 
 mod views {

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS new_rooms
 CREATE TABLE IF NOT EXISTS new_voters
 (
     id         INTEGER PRIMARY KEY NOT NULL,
+    voter_code TEXT                NOT NULL,
     approved   BOOLEAN             NOT NULL DEFAULT 0,
     room_id    INTEGER             NOT NULL REFERENCES new_rooms(id),
     created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
