@@ -198,7 +198,7 @@ mod homepage {
 mod room {
     use crate::{
         names,
-        rejections::{self, EmptyName, EmptyOption, NoOptions},
+        rejections::{self, EmptyName, EmptyOption, NoOptions, NotRoomAdmin},
         utils, views, with_state,
     };
 
@@ -228,6 +228,7 @@ mod room {
         let get_room = with_state(conn.clone())
             .and(warp::path!("rooms" / i64))
             .and(warp::get())
+            .and(warp::cookie::cookie(names::ROOM_ADMIN_COOKIE_NAME))
             .and_then(get_room)
             .with(warp::trace::named("get_room"));
 
@@ -275,7 +276,7 @@ mod room {
 
         let set_cookie_value = format!(
             "{}={admin_code}; HttpOnly; Max-Age=3600; Secure",
-            names::room_admin_cookie_name()
+            names::ROOM_ADMIN_COOKIE_NAME
         );
 
         let resp = Response::builder()
@@ -299,10 +300,58 @@ mod room {
     }
 
     async fn get_room(
-        _conn: sqlx::Pool<sqlx::Sqlite>,
-        _room_id: i64,
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        room_id: i64,
+        admin_code: String,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        Ok("hello")
+        let room = sqlx::query!(
+            r#"
+        SELECT id, name, options, admin_code
+        FROM new_rooms
+        WHERE id = ?1
+            "#,
+            room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room: {e}");
+            warp::reject::custom(rejections::InternalServerError)
+        })?;
+
+        let voters = sqlx::query!(
+            r#"
+        SELECT id, approved
+        FROM voters
+        WHERE room_id = ?1
+            "#,
+            room.id
+        )
+        .fetch_all(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting voters: {e}");
+            warp::reject::custom(rejections::InternalServerError)
+        })?;
+
+        if room.admin_code != admin_code {
+            return Err(warp::reject::custom(NotRoomAdmin));
+        }
+
+        let page = RoomPage {
+            id: room.id,
+            name: room.name,
+            options: serde_json::from_str::<Vec<String>>(&room.options).unwrap(),
+            voters: voters
+                .into_iter()
+                .map(|r| Voter {
+                    id: r.id,
+                    approved: r.approved,
+                })
+                .collect(),
+        };
+
+        Ok(views::page(&page.name.clone(), view(page)))
     }
 
     struct RoomPage {
@@ -313,7 +362,7 @@ mod room {
     }
 
     struct Voter {
-        id: i32,
+        id: i64,
         approved: bool,
     }
 
@@ -399,7 +448,7 @@ mod names {
         format!("/rooms/{room_id}/listen")
     }
 
-    pub fn approve_voter_url(voter_id: i32) -> String {
+    pub fn approve_voter_url(voter_id: i64) -> String {
         format!("/voters/{voter_id}/approve")
     }
 
@@ -411,9 +460,7 @@ mod names {
         "voter".to_string()
     }
 
-    pub fn room_admin_cookie_name() -> String {
-        "admin_code".to_string()
-    }
+    pub const ROOM_ADMIN_COOKIE_NAME: &str = "admin_code";
 }
 
 mod views {
@@ -1501,6 +1548,7 @@ mod rejections {
         CouldNotGetVotersStream,
         CouldNotDeserilizeOptions,
         CouldNotGetVoterCountStream,
+        NotRoomAdmin,
         EmptyName,
         NoOptions,
         EmptyOption,
