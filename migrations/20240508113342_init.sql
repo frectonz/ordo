@@ -30,3 +30,15 @@ CREATE TABLE IF NOT EXISTS votes
     voter_id   INTEGER             NOT NULL REFERENCES voters(id),
     created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+----------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS new_rooms
+(
+    id         INTEGER PRIMARY KEY NOT NULL,
+    admin_code TEXT                NOT NULL,
+    name       TEXT                NOT NULL,
+    options    TEXT                NOT NULL,
+    status     INTEGER             NOT NULL DEFAULT 0, -- 0 = waiting, 1 = started, 2 = ended
+    created_at TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

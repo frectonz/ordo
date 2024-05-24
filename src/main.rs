@@ -6,7 +6,8 @@ use warp::Filter;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "tracing=info,warp=debug".to_owned());
+    let filter = std::env::var("RUST_LOG")
+        .unwrap_or_else(|_| "tracing=info,warp=debug,ordo=debug".to_owned());
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -23,6 +24,7 @@ async fn main() -> color_eyre::Result<()> {
     let routes = static_files
         .or(routes)
         .recover(rejections::handle_rejection);
+
     warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 
     Ok(())
@@ -70,11 +72,12 @@ mod statics {
 pub fn routes(
     conn: sqlx::Pool<sqlx::Sqlite>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    homepage::route(conn)
+    let public = homepage::route(conn.clone()).or(room::route(conn));
+    public
 }
 
 mod homepage {
-    use crate::{rejections, urls, utils, views, with_state};
+    use crate::{names, rejections, utils, views, with_state};
 
     use maud::{html, Markup};
     use warp::Filter;
@@ -126,7 +129,7 @@ mod homepage {
         }))
     }
 
-    fn view(data: Homepage) -> impl warp::Reply {
+    fn view(data: Homepage) -> Markup {
         views::page(
             "Home",
             html! {
@@ -137,7 +140,7 @@ mod homepage {
                             (general_stats(&data))
                         }
                     }
-                    div."center" {
+                    div."center hide-on-small" {
                         img."w-500" src="/static/img/vote.svg";
                     }
                 }
@@ -147,7 +150,7 @@ mod homepage {
 
     fn create_room_form() -> Markup {
         html! {
-            form."w-full grid gap-md" hx-post=(urls::rooms_url()) hx-ext="json-enc" hx-target="main" hx-swap="innerHTML" {
+            form."w-full grid gap-md" hx-post=(names::rooms_url()) hx-ext="json-enc" hx-target="main" hx-swap="innerHTML" {
                 div."grid gap-sm" {
                     label."text-md" { "NAME" }
                     input."input-text" name="name" required="true" min="2" placeholder="my super cool vote" {}
@@ -159,7 +162,7 @@ mod homepage {
                     div."grid gap-sm" id="options" {
                         @for _ in 0..3 {
                             div."flex gap-sm" {
-                                input."input-text strech" name="option" required="true" placeholder="a choice" {}
+                                input."input-text strech" name="options" required="true" placeholder="a choice" {}
                                 button."button w-fit delete" type="button" { "DELETE" }
                             }
                         }
@@ -193,8 +196,175 @@ mod homepage {
     }
 }
 
+mod room {
+    use crate::{
+        names,
+        rejections::{self, EmptyName, EmptyOption, NoOptions},
+        utils, with_state,
+    };
+
+    use maud::{html, Markup};
+    use serde::Deserialize;
+    use warp::{
+        http::{header::SET_COOKIE, Response},
+        Filter,
+    };
+
+    #[derive(Deserialize)]
+    struct CreateRoomBody {
+        name: String,
+        options: Vec<String>,
+    }
+
+    pub fn route(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+    ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        let create_room = with_state(conn.clone())
+            .and(warp::path!("rooms"))
+            .and(warp::post())
+            .and(warp::body::json::<CreateRoomBody>())
+            .and_then(create_room)
+            .with(warp::trace::named("create_room"));
+
+        let get_room = with_state(conn.clone())
+            .and(warp::path!("rooms" / i64))
+            .and(warp::get())
+            .and_then(get_room)
+            .with(warp::trace::named("get_room"));
+
+        create_room.or(get_room)
+    }
+
+    async fn create_room(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        mut body: CreateRoomBody,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        if body.name.is_empty() {
+            return Err(warp::reject::custom(EmptyName));
+        }
+
+        if body.options.is_empty() {
+            return Err(warp::reject::custom(NoOptions));
+        }
+
+        for opt in &body.options {
+            if opt.is_empty() {
+                return Err(warp::reject::custom(EmptyOption));
+            }
+        }
+
+        body.options.sort();
+        let options = serde_json::to_string(&body.options).unwrap();
+        let admin_code = utils::generate_ulid();
+
+        let room_id = sqlx::query!(
+            r#"
+        INSERT INTO new_rooms (name, options, admin_code)
+        VALUES ( ?1, ?2, ?3 )
+            "#,
+            body.name,
+            options,
+            admin_code
+        )
+        .execute(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while creating room: {e}");
+            warp::reject::custom(rejections::InternalServerError)
+        })?
+        .last_insert_rowid();
+
+        let set_cookie_value = format!(
+            "{}={admin_code}; HttpOnly; Max-Age=3600; Secure",
+            names::room_admin_cookie_name()
+        );
+
+        let resp = Response::builder()
+            .header(SET_COOKIE, set_cookie_value)
+            .body(
+                view(RoomPage {
+                    id: room_id,
+                    name: body.name,
+                    options: body.options,
+                    voters: Vec::new(),
+                })
+                .into_string(),
+            )
+            .unwrap();
+
+        Ok(resp)
+    }
+
+    async fn get_room(
+        _conn: sqlx::Pool<sqlx::Sqlite>,
+        _room_id: i64,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        Ok("hello")
+    }
+
+    struct RoomPage {
+        id: i64,
+        name: String,
+        options: Vec<String>,
+        voters: Vec<Voter>,
+    }
+
+    struct Voter {
+        id: i32,
+        approved: bool,
+    }
+
+    fn view(room: RoomPage) -> Markup {
+        let voter_count = utils::format_num(room.voters.len() as i32);
+        let voter_label = utils::pluralize(room.voters.len() as i32, "voter", "voters");
+
+        html! {
+            section."grid gap-lg w-800" hx-ext="sse" sse-connect=(names::room_listen_url(room.id)) {
+                h1."text-lg" { (room.name) }
+
+                div."alert" { "ROOM WILL CLOSE IN LESS THAN AN HOUR." }
+
+                section."two-cols" {
+                    div."card card--secondary stat" {
+                        p."stat__num" hx-swap="innerHTML" sse-swap=(names::voter_count_event()) { (voter_count) }
+                        p."stat__desc" { (voter_label) " in room" }
+                    }
+
+                    div."card grid gap-lg" {
+                        h2."text-md" { "Options" }
+                        div."grid gap-sm" {
+                            @for option in room.options {
+                                span."boxed" { (option) }
+                            }
+                        }
+                    }
+                }
+
+                button."button text-lg align-left" hx-put=(names::start_vote_url(room.id)) hx-target="main" hx-swap="innerHTML" { "START VOTE" }
+
+                section."grid gap-md" hx-swap="beforeend" sse-swap=(names::new_voter_event()) {
+                    h2."text-md" { "Voters" }
+
+                    @for voter in room.voters {
+                        div."flex" {
+                            span."strech code" { (voter.id) }
+
+                            @if voter.approved {
+                                button."button w-fit" disabled { "APPROVED" }
+                            } @else {
+                                button."button w-fit" hx-put=(names::approve_voter_url(voter.id)) hx-swap="outerHTML" { "APPROVE" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 mod utils {
     use num_format::{Locale, ToFormattedString};
+    use ulid::Ulid;
 
     pub fn format_num(num: i32) -> String {
         num.to_formatted_string(&Locale::en)
@@ -203,11 +373,39 @@ mod utils {
     pub fn pluralize(num: i32, singular: &str, plural: &str) -> String {
         if num == 1 { singular } else { plural }.to_owned()
     }
+
+    pub fn generate_ulid() -> String {
+        Ulid::new().to_string()
+    }
 }
 
-mod urls {
+mod names {
     pub fn rooms_url() -> String {
         "/rooms".to_owned()
+    }
+
+    pub fn start_vote_url(room_id: i64) -> String {
+        format!("/rooms/{room_id}/start")
+    }
+
+    pub fn room_listen_url(room_id: i64) -> String {
+        format!("/rooms/{room_id}/listen")
+    }
+
+    pub fn approve_voter_url(voter_id: i32) -> String {
+        format!("/voters/{voter_id}/approve")
+    }
+
+    pub fn voter_count_event() -> String {
+        "voter-count".to_string()
+    }
+
+    pub fn new_voter_event() -> String {
+        "voter".to_string()
+    }
+
+    pub fn room_admin_cookie_name() -> String {
+        "admin_code".to_string()
     }
 }
 
@@ -245,7 +443,7 @@ mod views {
     fn header() -> Markup {
         html! {
             header."header" {
-                a."header--logo" href="/" { "ORDO" }
+                a."header__logo" href="/" { "ORDO" }
             }
         }
     }
@@ -1289,6 +1487,9 @@ mod rejections {
         CouldNotGetVotersStream,
         CouldNotDeserilizeOptions,
         CouldNotGetVoterCountStream,
+        EmptyName,
+        NoOptions,
+        EmptyOption,
         InternalServerError
     );
 
@@ -1366,7 +1567,7 @@ mod rejections {
             code = StatusCode::METHOD_NOT_ALLOWED;
             message = "METHOD_NOT_ALLOWED";
         } else {
-            eprintln!("unhandled rejection: {:?}", err);
+            tracing::error!("unhandled rejection: {:?}", err);
             code = StatusCode::INTERNAL_SERVER_ERROR;
             message = "UNHANDLED_REJECTION";
         }

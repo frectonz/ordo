@@ -37,7 +37,7 @@ a {
   background-color: var(--primary-color);
 }
 
-.header--logo {
+.header__logo {
   font-weight: 900;
   font-size: 2rem;
 }
@@ -59,7 +59,7 @@ a {
     grid-template-columns: 1fr;
   }
 
-  .two-cols>div:nth-child(2) {
+  .two-cols>.hide-on-small {
     display: none;
   }
 }
@@ -154,4 +154,48 @@ a {
   padding: 0.3rem 0.8rem;
   box-shadow: 3px 3px black;
   font-weight: 600;
+  cursor: pointer;
+}
+
+.alert {
+  background-color: var(--secondary-color);
+  padding: 0.3rem 0.8rem;
+  width: fit-content;
+  border: 1px solid black;
+}
+
+.card {
+  border: 1px solid;
+  padding: 1rem;
+  box-shadow: 3px 3px black;
+  background-color: var(--primary-color);
+}
+
+.card--secondary {
+  border: 1px solid;
+  padding: 1rem;
+  box-shadow: 3px 3px black;
+  background-color: var(--secondary-color);
+}
+
+.stat {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.stat__num {
+  font-size: 6rem;
+}
+
+.stat__desc {
+  font-size: 1.5rem;
+}
+
+.boxed {
+  padding: 0.3rem 0.8rem;
+  border: 1px solid black;
+}
+
+.align-left {
+  text-align: left;
 }

@@ -15,7 +15,7 @@ function makeOption() {
   div.classList.add("option");
 
   div.innerHTML = `
-  <input class="regular" name="option" required="true" placeholder="a choice"></input>
+  <input class="regular" name="options" required="true" placeholder="a choice"></input>
   <button class="bold delete" type="button">delete</button>
   `;
 
