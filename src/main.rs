@@ -72,8 +72,7 @@ mod statics {
 pub fn routes(
     conn: sqlx::Pool<sqlx::Sqlite>,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-    let public = homepage::route(conn.clone()).or(room::route(conn));
-    public
+    homepage::route(conn.clone()).or(room::route(conn))
 }
 
 mod homepage {
@@ -200,7 +199,7 @@ mod room {
     use crate::{
         names,
         rejections::{self, EmptyName, EmptyOption, NoOptions},
-        utils, with_state,
+        utils, views, with_state,
     };
 
     use maud::{html, Markup};
@@ -281,13 +280,17 @@ mod room {
 
         let resp = Response::builder()
             .header(SET_COOKIE, set_cookie_value)
+            .header("HX-Replace-Url", names::room_page_url(room_id))
             .body(
-                view(RoomPage {
-                    id: room_id,
-                    name: body.name,
-                    options: body.options,
-                    voters: Vec::new(),
-                })
+                views::titled(
+                    &body.name.clone(),
+                    view(RoomPage {
+                        id: room_id,
+                        name: body.name,
+                        options: body.options,
+                        voters: Vec::new(),
+                    }),
+                )
                 .into_string(),
             )
             .unwrap();
@@ -384,6 +387,10 @@ mod names {
         "/rooms".to_owned()
     }
 
+    pub fn room_page_url(room_id: i64) -> String {
+        format!("/rooms/{room_id}")
+    }
+
     pub fn start_vote_url(room_id: i64) -> String {
         format!("/rooms/{room_id}/start")
     }
@@ -410,7 +417,7 @@ mod names {
 }
 
 mod views {
-    use maud::{html, Markup, DOCTYPE};
+    use maud::{html, Markup, PreEscaped, DOCTYPE};
 
     fn font() -> Markup {
         html! {
@@ -465,13 +472,20 @@ mod views {
                 (css())
                 (js())
 
-                title { (format!("ORDO - {title}")) }
+                title { (format!("{title} - ORDO")) }
             }
 
             body {
                 (header())
                 (main(body))
             }
+        }
+    }
+
+    pub fn titled(title: &str, body: Markup) -> Markup {
+        html! {
+            (body)
+            (PreEscaped(format!("<script>document.title = `{title} - ORDO`;</script>")))
         }
     }
 
@@ -1220,7 +1234,7 @@ mod rooms {
         let mut the_options: Vec<String> = serde_json::from_str(&room.options).unwrap();
         the_options.sort();
 
-        let options = options.ok_or_else(|| warp::reject::not_found())?;
+        let options = options.ok_or_else(warp::reject::not_found)?;
         let mut user_options = options.clone();
         user_options.sort();
 
