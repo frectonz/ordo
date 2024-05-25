@@ -570,8 +570,13 @@ mod room {
                 voter_count,
             }),
         );
+        let set_cookie_value = format!(
+            "{}={voter_code}; HttpOnly; Max-Age=3600; Secure",
+            names::VOTER_COOKIE_NAME
+        );
 
         let resp = Response::builder()
+            .header(SET_COOKIE, set_cookie_value)
             .header("HX-Replace-Url", names::voter_page_url(voter_id))
             .body(page.into_string())
             .unwrap();
