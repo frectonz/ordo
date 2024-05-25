@@ -78,7 +78,7 @@ pub fn routes(
     broadcasters: Broadcasters,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     homepage::route(conn.clone())
-        .or(room::route(conn.clone()))
+        .or(room::route(conn.clone(), broadcasters.clone()))
         .or(events::route(conn, broadcasters))
 }
 
@@ -206,9 +206,12 @@ mod room {
     use std::time::Duration;
 
     use crate::{
+        events::{Broadcasters, RoomEvents},
         names,
-        rejections::{self, EmptyName, EmptyOption, NoOptions, NotRoomAdmin},
-        utils, views, with_state,
+        rejections::{self, EmptyName, EmptyOption, InternalServerError, NoOptions, NotRoomAdmin},
+        utils, views,
+        voters::{self, VoterPage},
+        with_state,
     };
 
     use maud::{html, Markup};
@@ -226,6 +229,7 @@ mod room {
 
     pub fn route(
         conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
     ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let create_room = with_state(conn.clone())
             .and(warp::path!("rooms"))
@@ -241,7 +245,20 @@ mod room {
             .and_then(get_room)
             .with(warp::trace::named("get_room"));
 
-        create_room.or(get_room)
+        let join_room_page = with_state(conn.clone())
+            .and(warp::path!("rooms" / i64 / "join"))
+            .and(warp::get())
+            .and_then(join_room_page)
+            .with(warp::trace::named("join_room_page"));
+
+        let join_room = with_state(conn.clone())
+            .and(with_state(broadcasters))
+            .and(warp::path!("rooms" / i64 / "join"))
+            .and(warp::post())
+            .and_then(join_room)
+            .with(warp::trace::named("join_room"));
+
+        create_room.or(get_room).or(join_room_page).or(join_room)
     }
 
     async fn create_room(
@@ -359,7 +376,7 @@ mod room {
         let voters = sqlx::query!(
             r#"
         SELECT id, approved
-        FROM voters
+        FROM new_voters
         WHERE room_id = ?1
             "#,
             room.id
@@ -435,8 +452,11 @@ mod room {
                     h2."text-md" { "Voters" }
 
                     @for voter in room.voters {
-                        div."flex" {
-                            span."strech code" { (voter.id) }
+                        div."flex gap-md" {
+                            span."strech code" {
+                                span { "VOTER ID" }
+                                span { (voter.id) }
+                            }
 
                             @if voter.approved {
                                 button."button w-fit" disabled { "APPROVED" }
@@ -449,11 +469,164 @@ mod room {
             }
         }
     }
+
+    async fn join_room_page(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        room_id: i64,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let room = sqlx::query!(
+            r#"
+        SELECT name
+        FROM new_rooms
+        WHERE id = ?1
+            "#,
+            room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room name: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        Ok(views::page(
+            &room.name,
+            html! {
+                section."grid gap-lg w-800" {
+                    h1."text-lg" { "JOIN THE \"" (room.name) "\" ROOM" }
+                    button."button w-full align-left" hx-post=(names::join_room_url(room_id)) hx-target="main" hx-swap="innerHTML" {
+                        "JOIN ROOM"
+                    }
+                }
+            },
+        ))
+    }
+
+    async fn join_room(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
+        room_id: i64,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let room_name = sqlx::query!(
+            r#"
+        SELECT name
+        FROM new_rooms
+        WHERE id = ?1
+            "#,
+            room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room: {e}");
+            warp::reject::custom(InternalServerError)
+        })?
+        .name;
+
+        let voter_code = utils::generate_ulid();
+        let voter_id = sqlx::query!(
+            r#"
+        INSERT INTO new_voters (voter_code, room_id)
+        VALUES (?1, ?2)
+            "#,
+            voter_code,
+            room_id
+        )
+        .execute(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while creating new voter: {e}");
+            warp::reject::custom(InternalServerError)
+        })?
+        .last_insert_rowid();
+
+        let voter_count = sqlx::query!(
+            "SELECT count(id) as count FROM new_voters WHERE room_id = ?1",
+            room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting voters count: {e}");
+            warp::reject::custom(InternalServerError)
+        })?
+        .count;
+
+        tokio::spawn(async move {
+            broadcasters
+                .send_event(room_id, RoomEvents::NewVoterCount(voter_count))
+                .await;
+            broadcasters
+                .send_event(room_id, RoomEvents::NewVoter(voter_id))
+                .await;
+        });
+
+        let page = views::titled(
+            &room_name.clone(),
+            voters::view(VoterPage {
+                id: voter_id,
+                room_id,
+                room_name,
+                voter_count,
+            }),
+        );
+
+        let resp = Response::builder()
+            .header("HX-Replace-Url", names::voter_page_url(voter_id))
+            .body(page.into_string())
+            .unwrap();
+
+        Ok(resp)
+    }
+}
+
+mod voters {
+    use maud::{html, Markup};
+
+    use crate::{names, utils};
+
+    pub struct VoterPage {
+        pub id: i64,
+        pub room_id: i64,
+        pub room_name: String,
+        pub voter_count: i32,
+    }
+
+    pub fn view(voter: VoterPage) -> Markup {
+        let voter_count = utils::format_num(voter.voter_count);
+        let voter_label = utils::pluralize(voter.voter_count, "voter", "voters");
+
+        html! {
+            section."grid gap-lg w-800" hx-ext="sse" sse-connect=(names::room_listen_url(voter.room_id)) {
+                h1."text-lg" { (voter.room_name) }
+
+                section."two-cols" {
+                    div."card card--secondary stat" {
+                        p."stat__num" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT) { (voter_count) }
+                        p."stat__desc" { (voter_label) " in room" }
+                    }
+
+                    div."card grid gap-lg" {
+                        h2."text-md" { "YOUR VOTER ID" }
+                        span."code" { (voter.id) }
+                        div."alert" hx-swap="innerHTML" sse-swap=(names::VOTER_APPROVED_EVENT) {
+                            "WAITING TO BE APPROVED."
+                        }
+                    }
+                }
+
+                div hx-swap="innerHTML" sse-swap=(names::VOTE_STARTED_EVENT) {
+                    div."alert" { "VOTES WILL START SHORTLY." }
+                }
+            }
+        }
+    }
 }
 
 mod events {
     use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
+    use maud::html;
     use tokio::sync::{
         broadcast::{self, Sender},
         Mutex,
@@ -582,9 +755,21 @@ mod events {
                 match (event, is_admin, is_voter) {
                     (NewVoterCount(count), true, false) | (NewVoterCount(count), false, true) => {
                         Event::default()
-                            .event(names::NEW_VOTER_EVENT)
+                            .event(names::VOTER_COUNT_EVENT)
                             .data(utils::format_num(count))
                     }
+
+                    (NewVoter(voter_id), true, false) => Event::default()
+                        .event(names::NEW_VOTER_EVENT)
+                        .data(html! {
+                            div."flex gap-md" {
+                                span."strech code" {
+                                    span { "VOTER ID" }
+                                    span { (voter_id) }
+                                }
+                                button."button w-fit" hx-put=(names::approve_voter_url(voter_id)) hx-swap="outerHTML" { "APPROVE" }
+                            }
+                        }.into_string()),
 
                     _ => Event::default().event(names::PING_EVENT),
                 }
@@ -629,6 +814,14 @@ mod names {
         format!("/rooms/{room_id}/listen")
     }
 
+    pub fn join_room_url(room_id: i64) -> String {
+        format!("/rooms/{room_id}/join")
+    }
+
+    pub fn voter_page_url(voter_id: i64) -> String {
+        format!("/voters/{voter_id}")
+    }
+
     pub fn approve_voter_url(voter_id: i64) -> String {
         format!("/voters/{voter_id}/approve")
     }
@@ -636,6 +829,8 @@ mod names {
     pub const VOTER_COUNT_EVENT: &str = "voter-count";
     pub const NEW_VOTER_EVENT: &str = "voter";
     pub const PING_EVENT: &str = "ping";
+    pub const VOTER_APPROVED_EVENT: &str = "voter-approved";
+    pub const VOTE_STARTED_EVENT: &str = "vote-started";
 
     pub const ROOM_ADMIN_COOKIE_NAME: &str = "admin_code";
     pub const VOTER_COOKIE_NAME: &str = "voter_code";
