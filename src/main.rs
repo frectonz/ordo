@@ -452,6 +452,11 @@ mod rooms {
                 section."grid gap-md" hx-swap="beforeend" sse-swap=(names::NEW_VOTER_EVENT) {
                     h2."text-md" { "Voters" }
 
+                    span."strech code" {
+                        span { "NEW VOTER LINK" }
+                        span { "/rooms/" (room.id) "/join" }
+                    }
+
                     @for voter in room.voters {
                         div."flex gap-md" {
                             span."strech code" {
