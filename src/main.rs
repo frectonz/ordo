@@ -432,8 +432,8 @@ mod rooms {
                 div."alert" { "ROOM WILL CLOSE IN LESS THAN AN HOUR." }
 
                 section."two-cols" {
-                    div."card card--secondary stat" {
-                        p."stat__num" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT) { (voter_count) }
+                    div."card card--secondary stat" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT){
+                        p."stat__num" { (voter_count) }
                         p."stat__desc" { (voter_label) " in room" }
                     }
 
@@ -920,7 +920,10 @@ mod events {
                     (NewVoterCount(count), Some(_), None) | (NewVoterCount(count), None, Some(_)) => {
                         Event::default()
                             .event(names::VOTER_COUNT_EVENT)
-                            .data(utils::format_num(count))
+                            .data(html! {
+                                p."stat__num" { (utils::format_num(count)) }
+                                p."stat__desc" { (utils::pluralize(count, "voter", "voters")) " in room" }
+                            }.into_string())
                     }
 
                     (NewVoter(voter_id), Some(_), None) => Event::default()
