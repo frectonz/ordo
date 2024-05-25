@@ -669,14 +669,20 @@ mod rooms {
 
 mod voters {
     use maud::{html, Markup};
+    use serde::Deserialize;
     use warp::Filter;
 
     use crate::{
         events::{Broadcasters, RoomEvents},
         names,
-        rejections::{InternalServerError, NotAnAdmin, NotVoter},
+        rejections::{InternalServerError, NotAnAdmin, NotVoter, UnknownOptions},
         utils, views, with_state,
     };
+
+    #[derive(Deserialize)]
+    struct VoteBody {
+        options: Vec<String>,
+    }
 
     pub fn route(
         conn: sqlx::Pool<sqlx::Sqlite>,
@@ -689,15 +695,24 @@ mod voters {
             .and_then(get_voter)
             .with(warp::trace::named("get_voter"));
 
-        let approve_voter = with_state(conn)
-            .and(with_state(broadcasters))
+        let approve_voter = with_state(conn.clone())
+            .and(with_state(broadcasters.clone()))
             .and(warp::path!("voters" / i64 / "approve"))
             .and(warp::put())
             .and(warp::cookie::cookie(names::ROOM_ADMIN_COOKIE_NAME))
             .and_then(approve_voter)
             .with(warp::trace::named("approve_voter"));
 
-        get_voter.or(approve_voter)
+        let vote = with_state(conn.clone())
+            .and(with_state(broadcasters.clone()))
+            .and(warp::path!("voters" / i64 / "vote"))
+            .and(warp::post())
+            .and(warp::cookie::cookie(names::VOTER_COOKIE_NAME))
+            .and(warp::body::json::<VoteBody>())
+            .and_then(vote)
+            .with(warp::trace::named("vote"));
+
+        get_voter.or(approve_voter).or(vote)
     }
 
     async fn get_voter(
@@ -856,6 +871,102 @@ mod voters {
             button."button w-fit" disabled { "APPROVED" }
         })
     }
+
+    async fn vote(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
+        voter_id: i64,
+        voter_code: String,
+        body: VoteBody,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let voter = sqlx::query!(
+            r#"
+        SELECT voter_code, approved, room_id
+        FROM new_voters
+        WHERE id = ?1
+            "#,
+            voter_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting voter: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        if voter_code != voter.voter_code {
+            return Err(warp::reject::custom(NotVoter));
+        }
+
+        let room_options = sqlx::query!(
+            r#"
+        SELECT options
+        FROM new_rooms
+        WHERE id = ?1 AND status = 1
+            "#,
+            voter.room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room: {e}");
+            warp::reject::custom(InternalServerError)
+        })?
+        .options;
+
+        let room_options: Vec<String> = serde_json::from_str(&room_options).unwrap();
+        let mut voter_options = body.options.clone();
+        voter_options.sort();
+
+        if room_options != voter_options {
+            return Err(warp::reject::custom(UnknownOptions));
+        }
+
+        let options = serde_json::to_string(&body.options).unwrap();
+
+        let _ = sqlx::query!(
+            r#"
+        UPDATE new_voters
+        SET options = ?1
+        WHERE id = ?2
+            "#,
+            options,
+            voter_id
+        )
+        .execute(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while storing vote options: {e}");
+            warp::reject::custom(InternalServerError)
+        });
+
+        tokio::spawn(async move {
+            broadcasters
+                .send_event(voter.room_id, RoomEvents::NewVote(voter_id))
+                .await;
+
+            if let Ok(votes) = sqlx::query!(
+                r#"
+            SELECT count(id) as count
+            FROM new_voters
+            WHERE room_id = ?1 AND options NOT NULL
+                "#,
+                voter.room_id
+            )
+            .fetch_one(&conn)
+            .await
+            .map(|r| r.count)
+            {
+                broadcasters
+                    .send_event(voter.room_id, RoomEvents::NewVoteCount(votes))
+                    .await;
+            }
+        });
+
+        Ok(html! {
+            h2."text-md" { "THANKS FOR VOTING!" }
+        })
+    }
 }
 
 mod voting {
@@ -894,7 +1005,7 @@ mod voting {
                         p."stat__desc" { "approved " (approved_label) }
                     }
 
-                    div."card stat" hx-swap="innerHTML" sse-swap=(names::NEW_VOTE_EVENT) {
+                    div."card stat" hx-swap="innerHTML" sse-swap=(names::VOTE_COUNT_EVENT) {
                         p."stat__num" { (recorded_votes) }
                         p."stat__desc" { "recorded " (recorded_votes_label) }
                     }
@@ -943,12 +1054,13 @@ mod events {
 
     #[derive(Clone, Debug)]
     pub enum RoomEvents {
-        NewVoterCount(i32),
         NewVoter(i64),
+        NewVoterCount(i32),
         VoterApproved(i64),
-        NewVoteCount(i64),
         VoteStarted(Vec<String>),
         VoteEnded,
+        NewVote(i64),
+        NewVoteCount(i32),
     }
 
     #[derive(Clone, Default)]
@@ -1095,7 +1207,7 @@ mod events {
                     (VoteStarted(options), None, Some(voter_id)) => Event::default()
                         .event(names::VOTE_STARTED_EVENT)
                         .data(html! {
-                            form."grid gap-sm sortable" hx-ext="json-enc" hx-post={ "/voters/" (voter_id) "/vote" } hx-swap="outerHTML" {
+                            form."grid gap-md sortable" hx-ext="json-enc" hx-post=(names::vote_url(voter_id)) hx-swap="outerHTML" {
                                 h2."text-lg" { "START VOTING" }
                                 p."text-sm" { "(REORDER THE OPTIONS BY DRAGGING AND DROPPING THEM)" }
 
@@ -1103,13 +1215,26 @@ mod events {
                                     @for option in options {
                                         div."card" {
                                             (option)
-                                            input type="hidden" name="option" value=(option) {}
+                                            input type="hidden" name="options" value=(option) {}
                                         }
                                     }
                                 }
 
                                 button."button align-left" type="submit" { "SUBMIT VOTE" }
                             }
+                        }.into_string()),
+
+                    (NewVote(voter_id), Some(_), None) => Event::default()
+                        .event(names::vote_event(voter_id))
+                        .data(html! {
+                            span."boxed" { "VOTED" }
+                        }.into_string()),
+
+                    (NewVoteCount(votes), Some(_), None) => Event::default()
+                        .event(names::VOTE_COUNT_EVENT)
+                        .data(html! {
+                            p."stat__num" { (utils::format_num(votes)) }
+                            p."stat__desc" { "recorded " (utils::pluralize(votes, "vote", "votes")) }
                         }.into_string()),
 
                     _ => Event::default().event(names::PING_EVENT),
@@ -1171,11 +1296,17 @@ mod names {
         format!("/voters/{voter_id}/approve")
     }
 
+    pub fn vote_url(voter_id: i64) -> String {
+        format!("/voters/{voter_id}/vote")
+    }
+
     pub const VOTER_COUNT_EVENT: &str = "voter-count";
     pub const NEW_VOTER_EVENT: &str = "voter";
-    pub const PING_EVENT: &str = "ping";
+
     pub const VOTE_STARTED_EVENT: &str = "vote-started";
-    pub const NEW_VOTE_EVENT: &str = "vote";
+    pub const VOTE_COUNT_EVENT: &str = "vote-count";
+
+    pub const PING_EVENT: &str = "ping";
 
     pub fn voter_approved_event(voter_id: i64) -> String {
         format!("voter-approved:{voter_id}")
@@ -2275,6 +2406,7 @@ mod rejections {
         CouldNotGetVotersStream,
         CouldNotDeserilizeOptions,
         CouldNotGetVoterCountStream,
+        UnknownOptions,
         NotVoter,
         NotRoomAdmin,
         EmptyName,
