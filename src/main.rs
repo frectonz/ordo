@@ -20,7 +20,7 @@ async fn main() -> color_eyre::Result<()> {
     let conn: Pool<Sqlite> = Pool::connect(&db).await?;
     let broadcasters = Broadcasters::new();
 
-    let _home = rooms::routes(conn.clone());
+    let _home = old_rooms::routes(conn.clone());
 
     let routes = routes(conn, broadcasters);
     let static_files = warp::path("static").and(statics::routes());
@@ -78,7 +78,8 @@ pub fn routes(
     broadcasters: Broadcasters,
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     homepage::route(conn.clone())
-        .or(room::route(conn.clone(), broadcasters.clone()))
+        .or(rooms::route(conn.clone(), broadcasters.clone()))
+        .or(voters::route(conn.clone()))
         .or(events::route(conn, broadcasters))
 }
 
@@ -202,7 +203,7 @@ mod homepage {
     }
 }
 
-mod room {
+mod rooms {
     use std::time::Duration;
 
     use crate::{
@@ -329,7 +330,7 @@ mod room {
         });
 
         let set_cookie_value = format!(
-            "{}={admin_code}; HttpOnly; Max-Age=3600; Secure",
+            "{}={admin_code}; HttpOnly; Max-Age=3600; Secure; Path=/",
             names::ROOM_ADMIN_COOKIE_NAME
         );
 
@@ -562,16 +563,17 @@ mod room {
         });
 
         let page = views::titled(
-            &room_name.clone(),
+            "Voter",
             voters::view(VoterPage {
                 id: voter_id,
                 room_id,
                 room_name,
                 voter_count,
+                approved: false,
             }),
         );
         let set_cookie_value = format!(
-            "{}={voter_code}; HttpOnly; Max-Age=3600; Secure",
+            "{}={voter_code}; HttpOnly; Max-Age=3600; Secure; Path=/",
             names::VOTER_COOKIE_NAME
         );
 
@@ -587,14 +589,101 @@ mod room {
 
 mod voters {
     use maud::{html, Markup};
+    use warp::Filter;
 
-    use crate::{names, utils};
+    use crate::{
+        names,
+        rejections::{InternalServerError, NotVoter},
+        utils, views, with_state,
+    };
+
+    pub fn route(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+    ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
+        let get_voter = with_state(conn)
+            .and(warp::path!("voters" / i64))
+            .and(warp::get())
+            .and(warp::cookie::cookie(names::VOTER_COOKIE_NAME))
+            .and_then(get_voter)
+            .with(warp::trace::named("get_voter"));
+
+        get_voter
+    }
+
+    async fn get_voter(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        voter_id: i64,
+        voter_code: String,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let voter = sqlx::query!(
+            r#"
+        SELECT voter_code, approved, room_id
+        FROM new_voters
+        WHERE id = ?1
+            "#,
+            voter_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting voter: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        if voter_code != voter.voter_code {
+            return Err(warp::reject::custom(NotVoter));
+        }
+
+        let room_name = sqlx::query!(
+            r#"
+        SELECT name
+        FROM new_rooms
+        WHERE id = ?1
+            "#,
+            voter.room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room: {e}");
+            warp::reject::custom(InternalServerError)
+        })?
+        .name;
+
+        let voter_count = sqlx::query!(
+            r#"
+        SELECT count(id) as count
+        FROM new_voters
+        WHERE room_id = ?1
+            "#,
+            voter.room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room: {e}");
+            warp::reject::custom(InternalServerError)
+        })?
+        .count;
+
+        Ok(views::page(
+            "Voter",
+            view(VoterPage {
+                id: voter_id,
+                room_id: voter.room_id,
+                room_name,
+                voter_count,
+                approved: voter.approved,
+            }),
+        ))
+    }
 
     pub struct VoterPage {
         pub id: i64,
         pub room_id: i64,
         pub room_name: String,
         pub voter_count: i32,
+        pub approved: bool,
     }
 
     pub fn view(voter: VoterPage) -> Markup {
@@ -614,8 +703,12 @@ mod voters {
                     div."card grid gap-lg" {
                         h2."text-md" { "YOUR VOTER ID" }
                         span."code" { (voter.id) }
-                        div."alert" hx-swap="innerHTML" sse-swap=(names::VOTER_APPROVED_EVENT) {
-                            "WAITING TO BE APPROVED."
+                        @if voter.approved {
+                            div."alert" { "VOTER HAS BEEN APPROVED." }
+                        } else {
+                            div."alert" hx-swap="innerHTML" sse-swap=(names::VOTER_APPROVED_EVENT) {
+                                "WAITING TO BE APPROVED."
+                            }
                         }
                     }
                 }
@@ -937,7 +1030,7 @@ mod views {
     }
 }
 
-mod rooms {
+mod old_rooms {
     use std::{
         collections::HashMap,
         convert::Infallible,
@@ -1926,6 +2019,7 @@ mod rejections {
         CouldNotGetVotersStream,
         CouldNotDeserilizeOptions,
         CouldNotGetVoterCountStream,
+        NotVoter,
         NotRoomAdmin,
         EmptyName,
         NoOptions,

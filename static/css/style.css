@@ -25,7 +25,7 @@ a {
 .header {
   top: 0;
   position: sticky;
-  width: 100vw;
+  width: 100%;
   padding: 1rem;
   border-bottom: 2px solid black;
   box-shadow: 2px 2px white,
@@ -145,6 +145,11 @@ a {
   font-size: 1.5rem;
   padding: 0.3rem 0.8rem;
   box-shadow: 3px 3px black;
+}
+
+.input-text::placeholder {
+  color: black;
+  opacity: 50%;
 }
 
 .button {
