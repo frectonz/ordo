@@ -596,7 +596,7 @@ mod rooms {
     ) -> Result<impl warp::Reply, warp::Rejection> {
         let room = sqlx::query!(
             r#"
-        SELECT admin_code, name
+        SELECT admin_code, name, options
         FROM new_rooms
         WHERE id = ?1 AND status = 0
             "#,
@@ -643,9 +643,10 @@ mod rooms {
             warp::reject::custom(InternalServerError)
         })?;
 
+        let options = serde_json::from_str(&room.options).unwrap();
         tokio::spawn(async move {
             broadcasters
-                .send_event(room_id, RoomEvents::VoteStarted)
+                .send_event(room_id, RoomEvents::VoteStarted(options))
                 .await;
         });
 
@@ -946,7 +947,7 @@ mod events {
         NewVoter(i64),
         VoterApproved(i64),
         NewVoteCount(i64),
-        VoteStarted,
+        VoteStarted(Vec<String>),
         VoteEnded,
     }
 
@@ -1091,10 +1092,24 @@ mod events {
                             div."alert" { "VOTER HAS BEEN APPROVED." }
                         }.into_string()),
 
-                    (VoteStarted, None, Some(_)) => Event::default()
+                    (VoteStarted(options), None, Some(voter_id)) => Event::default()
                         .event(names::VOTE_STARTED_EVENT)
                         .data(html! {
-                            p."text-sm" { "VOTE STARTED"}
+                            form."grid gap-sm sortable" hx-ext="json-enc" hx-post={ "/voters/" (voter_id) "/vote" } hx-swap="outerHTML" {
+                                h2."text-lg" { "START VOTING" }
+                                p."text-sm" { "(REORDER THE OPTIONS BY DRAGGING AND DROPPING THEM)" }
+
+                                div."grid gap-md sortable" {
+                                    @for option in options {
+                                        div."card" {
+                                            (option)
+                                            input type="hidden" name="option" value=(option) {}
+                                        }
+                                    }
+                                }
+
+                                button."button align-left" type="submit" { "SUBMIT VOTE" }
+                            }
                         }.into_string()),
 
                     _ => Event::default().event(names::PING_EVENT),
@@ -1190,6 +1205,7 @@ mod views {
             script src="https://unpkg.com/htmx.org@1.9.12" {}
             script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
             script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/json-enc.js" {}
+            script src="https://unpkg.com/sortablejs@1.15.2" {}
         }
     }
 

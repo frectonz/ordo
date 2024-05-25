@@ -1,5 +1,3 @@
-htmx.logAll();
-
 function homepage() {
   window.addEventListener("load", () => {
     const addButton = document.querySelector("#addOption");
@@ -39,4 +37,19 @@ function homepage() {
   }
 }
 
+function setupSortable() {
+  document.addEventListener("htmx:afterSettle", () => {
+    const sortables = document.querySelectorAll(".sortable");
+
+    for (const sortable of sortables) {
+        new Sortable(sortable, {
+            animation: 150,
+            ghostClass: "sortable-active"
+        });
+    }
+  });
+}
+
+
 homepage();
+setupSortable();

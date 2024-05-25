@@ -225,3 +225,8 @@ a {
   align-items: center;
   justify-content: space-between;
 }
+
+.sortable-active {
+  background-color: var(--secondary-color);
+  opacity: 70%;
+}
