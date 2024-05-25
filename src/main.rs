@@ -360,7 +360,7 @@ mod rooms {
             r#"
         SELECT id, name, options, admin_code
         FROM new_rooms
-        WHERE id = ?1
+        WHERE id = ?1 AND status = 0
             "#,
             room_id
         )
@@ -481,7 +481,7 @@ mod rooms {
             r#"
         SELECT name
         FROM new_rooms
-        WHERE id = ?1
+        WHERE id = ?1 AND status = 0
             "#,
             room_id
         )
@@ -728,7 +728,7 @@ mod voters {
             r#"
         SELECT name
         FROM new_rooms
-        WHERE id = ?1
+        WHERE id = ?1 AND status = 0
             "#,
             voter.room_id
         )
