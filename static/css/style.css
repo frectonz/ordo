@@ -160,6 +160,16 @@ a {
   box-shadow: 3px 3px black;
   font-weight: 600;
   cursor: pointer;
+  color: black;
+}
+
+.button:disabled {
+  opacity: 50%;
+  box-shadow: unset;
+}
+
+.button:active {
+  box-shadow: unset;
 }
 
 .alert {

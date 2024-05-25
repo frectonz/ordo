@@ -79,7 +79,7 @@ pub fn routes(
 ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
     homepage::route(conn.clone())
         .or(rooms::route(conn.clone(), broadcasters.clone()))
-        .or(voters::route(conn.clone()))
+        .or(voters::route(conn.clone(), broadcasters.clone()))
         .or(events::route(conn, broadcasters))
 }
 
@@ -592,22 +592,32 @@ mod voters {
     use warp::Filter;
 
     use crate::{
+        events::{Broadcasters, RoomEvents},
         names,
-        rejections::{InternalServerError, NotVoter},
+        rejections::{InternalServerError, NotAnAdmin, NotVoter},
         utils, views, with_state,
     };
 
     pub fn route(
         conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
     ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        let get_voter = with_state(conn)
+        let get_voter = with_state(conn.clone())
             .and(warp::path!("voters" / i64))
             .and(warp::get())
             .and(warp::cookie::cookie(names::VOTER_COOKIE_NAME))
             .and_then(get_voter)
             .with(warp::trace::named("get_voter"));
 
-        get_voter
+        let approve_voter = with_state(conn)
+            .and(with_state(broadcasters))
+            .and(warp::path!("voters" / i64 / "approve"))
+            .and(warp::put())
+            .and(warp::cookie::cookie(names::ROOM_ADMIN_COOKIE_NAME))
+            .and_then(approve_voter)
+            .with(warp::trace::named("approve_voter"));
+
+        get_voter.or(approve_voter)
     }
 
     async fn get_voter(
@@ -661,7 +671,7 @@ mod voters {
         .fetch_one(&conn)
         .await
         .map_err(|e| {
-            tracing::error!("error while getting room: {e}");
+            tracing::error!("error while getting voter count: {e}");
             warp::reject::custom(InternalServerError)
         })?
         .count;
@@ -706,7 +716,7 @@ mod voters {
                         @if voter.approved {
                             div."alert" { "VOTER HAS BEEN APPROVED." }
                         } else {
-                            div."alert" hx-swap="innerHTML" sse-swap=(names::VOTER_APPROVED_EVENT) {
+                            div."alert" hx-swap="outerHTML" sse-swap=(names::voter_approved_event(voter.id)) {
                                 "WAITING TO BE APPROVED."
                             }
                         }
@@ -718,6 +728,53 @@ mod voters {
                 }
             }
         }
+    }
+
+    async fn approve_voter(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
+        voter_id: i64,
+        admin_code: String,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let room = sqlx::query!(
+            r#"
+        SELECT id, admin_code
+        FROM new_rooms
+        WHERE id = (SELECT room_id FROM new_voters WHERE id = ?1)
+            "#,
+            voter_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting voter: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        if admin_code != room.admin_code {
+            return Err(warp::reject::custom(NotAnAdmin));
+        }
+
+        sqlx::query!(
+            r#"UPDATE new_voters SET approved = true WHERE id = ?1"#,
+            voter_id
+        )
+        .execute(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while approving voter: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        tokio::spawn(async move {
+            broadcasters
+                .send_event(room.id, RoomEvents::VoterApproved(voter_id))
+                .await;
+        });
+
+        Ok(html! {
+            button."button w-fit" disabled { "APPROVED" }
+        })
     }
 }
 
@@ -798,11 +855,11 @@ mod events {
         admin_code: Option<String>,
         voter_code: Option<String>,
     ) -> Result<impl warp::Reply, warp::Rejection> {
-        let is_admin = match admin_code {
+        let admin = match admin_code {
             Some(admin_code) => {
                 let room = sqlx::query!(
                     r#"
-                SELECT admin_code
+                SELECT id, admin_code
                 FROM new_rooms
                 WHERE id = ?1
                     "#,
@@ -815,12 +872,16 @@ mod events {
                     warp::reject::custom(InternalServerError)
                 })?;
 
-                admin_code == room.admin_code
+                if admin_code == room.admin_code {
+                    Some(room.id)
+                } else {
+                    None
+                }
             }
-            None => false,
+            None => None,
         };
 
-        let is_voter = match voter_code {
+        let voter = match voter_code {
             Some(voter_code) => sqlx::query!(
                 r#"
             SELECT id
@@ -835,8 +896,8 @@ mod events {
                 tracing::error!("error while getting admin code: {e}");
                 warp::reject::custom(InternalServerError)
             })?
-            .is_some(),
-            None => false,
+            .map(|v| v.id),
+            None => None,
         };
 
         let stream = broadcasters.get_stream(room_id).await;
@@ -850,14 +911,14 @@ mod events {
             })
             .map(move |event| {
                 use RoomEvents::*;
-                match (event, is_admin, is_voter) {
-                    (NewVoterCount(count), true, false) | (NewVoterCount(count), false, true) => {
+                match (event, admin, voter) {
+                    (NewVoterCount(count), Some(_), None) | (NewVoterCount(count), None, Some(_)) => {
                         Event::default()
                             .event(names::VOTER_COUNT_EVENT)
                             .data(utils::format_num(count))
                     }
 
-                    (NewVoter(voter_id), true, false) => Event::default()
+                    (NewVoter(voter_id), Some(_), None) => Event::default()
                         .event(names::NEW_VOTER_EVENT)
                         .data(html! {
                             div."flex gap-md" {
@@ -867,6 +928,18 @@ mod events {
                                 }
                                 button."button w-fit" hx-put=(names::approve_voter_url(voter_id)) hx-swap="outerHTML" { "APPROVE" }
                             }
+                        }.into_string()),
+
+                    (VoterApproved(voter_id), Some(_), None) => Event::default()
+                        .event(names::voter_approved_event(voter_id))
+                        .data(html! {
+                            button."button w-fit" disabled { "APPROVED" }
+                        }.into_string()),
+
+                    (VoterApproved(voter_id), None, Some(listener)) if voter_id == listener => Event::default()
+                        .event(names::voter_approved_event(voter_id))
+                        .data(html! {
+                            div."alert" { "VOTER HAS BEEN APPROVED." }
                         }.into_string()),
 
                     _ => Event::default().event(names::PING_EVENT),
@@ -927,8 +1000,11 @@ mod names {
     pub const VOTER_COUNT_EVENT: &str = "voter-count";
     pub const NEW_VOTER_EVENT: &str = "voter";
     pub const PING_EVENT: &str = "ping";
-    pub const VOTER_APPROVED_EVENT: &str = "voter-approved";
     pub const VOTE_STARTED_EVENT: &str = "vote-started";
+
+    pub fn voter_approved_event(voter_id: i64) -> String {
+        format!("voter-approved:{voter_id}")
+    }
 
     pub const ROOM_ADMIN_COOKIE_NAME: &str = "admin_code";
     pub const VOTER_COOKIE_NAME: &str = "voter_code";
