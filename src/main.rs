@@ -1,7 +1,7 @@
 use std::env;
 
 use events::Broadcasters;
-use sqlx::{Pool, Sqlite};
+use sqlx::{migrate::MigrateDatabase, Pool, Sqlite};
 use tracing_subscriber::fmt::format::FmtSpan;
 use warp::Filter;
 
@@ -17,7 +17,14 @@ async fn main() -> color_eyre::Result<()> {
 
     let db_url = env::var("DATABASE_URL")
         .ok()
-        .unwrap_or("sqlite:/data/ordo.db".to_owned());
+        .unwrap_or("sqlite:/ordo.db".to_owned());
+
+    let exists = Sqlite::database_exists(&db_url).await.unwrap_or(false);
+
+    if !exists {
+        Sqlite::create_database(&db_url).await?;
+    }
+
     let conn: Pool<Sqlite> = Pool::connect(&db_url).await?;
 
     sqlx::migrate!().run(&conn).await?;

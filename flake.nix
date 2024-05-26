@@ -52,17 +52,10 @@
           '';
         });
 
-        docker = pkgs.dockerTools.buildImage {
+        docker = pkgs.dockerTools.buildLayeredImage {
           name = "ordo";
           tag = "latest";
           created = "now";
-
-          runAsRoot = ''
-            #!${pkgs.runtimeShell}
-            mkdir -p /data
-            ${pkgs.sqlite}/bin/sqlite3 /data/ordo.db ".databases"
-          '';
-
           config.Cmd = "${bin}/bin/ordo";
           config.Expose = "3030";
         };

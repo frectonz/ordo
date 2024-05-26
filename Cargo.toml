@@ -17,3 +17,9 @@ num-format = "0.4.4"
 ulid = "1.1.2"
 tokio-stream = { version = "0.1.15", features = ["sync"] }
 serde = { version = "1.0.202", features = ["derive"] }
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
