@@ -1494,13 +1494,13 @@ mod views {
 
     fn css() -> Markup {
         html! {
-            link rel="stylesheet" href="/static/css/style.css";
+            link rel="stylesheet" href="/static/style.css";
         }
     }
 
     fn js() -> Markup {
         html! {
-            script src="/static/js/main.js" {}
+            script src="/static/main.js" {}
         }
     }
 
@@ -1545,28 +1545,6 @@ mod views {
             (PreEscaped(format!("<script>document.title = `{title} - ORDO`;</script>")))
         }
     }
-
-    pub fn with_layout(title: &str, head: Markup, body: Markup) -> Markup {
-        html! {
-            (DOCTYPE)
-            head {
-                meta charset="utf-8";
-
-                link rel="preconnect" href="https://fonts.googleapis.com";
-                link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
-                link href="https://fonts.googleapis.com/css2?family=Darker+Grotesque:wght@300..900&display=swap" rel="stylesheet";
-
-                link rel="stylesheet" href="/static/css/global.css";
-                (head)
-                title { (format!("ORDO - {title}")) }
-            }
-
-            body {
-                header { h1."logo" { a href="/" { "ORDO" } } }
-                main { (body) }
-            }
-        }
-    }
 }
 
 mod rejections {
@@ -1579,7 +1557,7 @@ mod rejections {
         reply::Reply,
     };
 
-    use crate::views::with_layout;
+    use crate::views;
 
     macro_rules! rejects {
         ($($name:ident),*) => {
@@ -1628,11 +1606,8 @@ mod rejections {
     }
 
     fn error_page(message: &str) -> Markup {
-        with_layout(
+        views::page(
             "Error",
-            html! {
-                link rel="stylesheet" href="/static/css/error.css";
-            },
             html! {
                 div."error" {
                     div {
