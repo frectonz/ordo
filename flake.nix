@@ -48,11 +48,17 @@
             sqlx migrate run
           '';
         });
+
+        docker = pkgs.dockerTools.buildLayeredImage {
+          name = "ordo";
+          tag = "latest";
+          config.Cmd = "${bin}/bin/ordo";
+        };
       in
       with pkgs;
       {
         packages = {
-          inherit bin;
+          inherit bin docker;
           default = bin;
         };
 
