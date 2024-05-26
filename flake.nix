@@ -31,6 +31,9 @@
           src = ./.;
           filter = path: type:
             (pkgs.lib.hasSuffix "\.sql" path) ||
+            (pkgs.lib.hasSuffix "\.css" path) ||
+            (pkgs.lib.hasSuffix "\.js" path) ||
+            (pkgs.lib.hasSuffix "\.svg" path) ||
             (craneLib.filterCargoSources path type)
           ;
         };
