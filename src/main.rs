@@ -219,6 +219,7 @@ mod rooms {
         broadcasters: Broadcasters,
     ) -> impl warp::Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
         let create_room = with_state(conn.clone())
+            .and(with_state(broadcasters.clone()))
             .and(warp::path!("rooms"))
             .and(warp::post())
             .and(warp::body::json::<CreateRoomBody>())
@@ -271,6 +272,7 @@ mod rooms {
 
     async fn create_room(
         conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
         mut body: CreateRoomBody,
     ) -> Result<impl warp::Reply, warp::Rejection> {
         if body.name.is_empty() {
@@ -328,8 +330,9 @@ mod rooms {
             )
             .execute(&conn)
             .await;
-
             tracing::debug!("delete room result: {res:?}");
+
+            broadcasters.end_stream(room_id).await;
         });
 
         let set_cookie_value = format!(
@@ -753,6 +756,7 @@ mod rooms {
             broadcasters
                 .send_event(room_id, RoomEvents::VoteEnded)
                 .await;
+            broadcasters.end_stream(room_id).await;
         });
 
         let page = voting::result_page(ResultPage {
@@ -1218,9 +1222,8 @@ mod events {
                 .entry(room_id)
                 .or_insert_with(|| broadcast::channel(16).0);
 
-            let _ = tx
-                .send(event)
-                .map_err(|e| tracing::error!("failed to send event: {e}"));
+            let res = tx.send(event);
+            tracing::debug!("send event result: {res:?}");
         }
 
         async fn get_stream(&self, room_id: i64) -> BroadcastStream<RoomEvents> {
@@ -1231,6 +1234,12 @@ mod events {
             let rx = tx.subscribe();
 
             BroadcastStream::new(rx)
+        }
+
+        pub async fn end_stream(&self, room_id: i64) {
+            let mut map = self.map.lock().await;
+            let res = map.remove(&room_id);
+            tracing::debug!("end stream result: {res:?}");
         }
     }
 
@@ -1383,7 +1392,7 @@ mod events {
                     _ => Event::default().event(names::PING_EVENT),
                 }
             })
-            .map(|event| Ok::<_, Infallible>(event));
+            .map(Ok::<_, Infallible>);
 
         Ok(sse::reply(stream))
     }
