@@ -18,6 +18,9 @@ async fn main() -> color_eyre::Result<()> {
     let db = env::var("DATABASE_URL")?;
 
     let conn: Pool<Sqlite> = Pool::connect(&db).await?;
+
+    sqlx::migrate!().run(&conn).await?;
+
     let broadcasters = Broadcasters::new();
 
     let routes = routes(conn, broadcasters);
@@ -102,7 +105,7 @@ mod homepage {
     }
 
     async fn handler(conn: sqlx::Pool<sqlx::Sqlite>) -> Result<impl warp::Reply, warp::Rejection> {
-        let rooms = sqlx::query!(r#"SELECT count(id) as count FROM new_rooms"#)
+        let rooms = sqlx::query!(r#"SELECT count(id) as count FROM rooms"#)
             .fetch_one(&conn)
             .await
             .map_err(|e| {
@@ -110,7 +113,7 @@ mod homepage {
                 warp::reject::custom(rejections::InternalServerError)
             })?;
 
-        let voters = sqlx::query!(r#"SELECT count(id) as count FROM new_voters"#)
+        let voters = sqlx::query!(r#"SELECT count(id) as count FROM voters"#)
             .fetch_one(&conn)
             .await
             .map_err(|e| {
@@ -291,7 +294,7 @@ mod rooms {
 
         let room_id = sqlx::query!(
             r#"
-        INSERT INTO new_rooms (name, options, admin_code)
+        INSERT INTO rooms (name, options, admin_code)
         VALUES ( ?1, ?2, ?3 )
             "#,
             body.name,
@@ -313,10 +316,10 @@ mod rooms {
                 r#"
             BEGIN TRANSACTION;
 
-            DELETE FROM new_voters
+            DELETE FROM voters
             WHERE room_id = ?1;
 
-            DELETE FROM new_rooms
+            DELETE FROM rooms
             WHERE id = ?1;
 
             COMMIT;
@@ -364,7 +367,7 @@ mod rooms {
         let room = sqlx::query!(
             r#"
         SELECT id, name, options, admin_code
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1 AND status = 0
             "#,
             room_id
@@ -379,7 +382,7 @@ mod rooms {
         let voters = sqlx::query!(
             r#"
         SELECT id, approved
-        FROM new_voters
+        FROM voters
         WHERE room_id = ?1
             "#,
             room.id
@@ -485,7 +488,7 @@ mod rooms {
         let room = sqlx::query!(
             r#"
         SELECT name
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1 AND status = 0
             "#,
             room_id
@@ -518,7 +521,7 @@ mod rooms {
         let room_name = sqlx::query!(
             r#"
         SELECT name
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1
             "#,
             room_id
@@ -534,7 +537,7 @@ mod rooms {
         let voter_code = utils::generate_ulid();
         let voter_id = sqlx::query!(
             r#"
-        INSERT INTO new_voters (voter_code, room_id)
+        INSERT INTO voters (voter_code, room_id)
         VALUES (?1, ?2)
             "#,
             voter_code,
@@ -549,7 +552,7 @@ mod rooms {
         .last_insert_rowid();
 
         let voter_count = sqlx::query!(
-            "SELECT count(id) as count FROM new_voters WHERE room_id = ?1",
+            "SELECT count(id) as count FROM voters WHERE room_id = ?1",
             room_id
         )
         .fetch_one(&conn)
@@ -602,7 +605,7 @@ mod rooms {
         let room = sqlx::query!(
             r#"
         SELECT admin_code, name, options
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1 AND status = 0
             "#,
             room_id
@@ -620,7 +623,7 @@ mod rooms {
 
         sqlx::query!(
             r#"
-        UPDATE new_rooms
+        UPDATE rooms
         SET status = 1
         WHERE id = ?1
             "#,
@@ -636,8 +639,8 @@ mod rooms {
         let voters = sqlx::query!(
             r#"
         SELECT id, options
-        FROM new_voters
-        WHERE new_voters.room_id = ?1 AND new_voters.approved = TRUE
+        FROM voters
+        WHERE voters.room_id = ?1 AND voters.approved = TRUE
             "#,
             room_id
         )
@@ -680,7 +683,7 @@ mod rooms {
         let room = sqlx::query!(
             r#"
         SELECT admin_code, name, options
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1 AND status = 1
             "#,
             room_id
@@ -698,7 +701,7 @@ mod rooms {
 
         sqlx::query!(
             r#"
-        UPDATE new_rooms
+        UPDATE rooms
         SET status = 2
         WHERE id = ?1
             "#,
@@ -714,8 +717,8 @@ mod rooms {
         let votes = sqlx::query!(
             r#"
         SELECT options
-        FROM new_voters
-        WHERE new_voters.room_id = ?1 AND new_voters.approved = TRUE AND options NOT NULL
+        FROM voters
+        WHERE voters.room_id = ?1 AND voters.approved = TRUE AND options NOT NULL
             "#,
             room_id
         )
@@ -823,7 +826,7 @@ mod voters {
         let voter = sqlx::query!(
             r#"
         SELECT voter_code, approved, room_id
-        FROM new_voters
+        FROM voters
         WHERE id = ?1
             "#,
             voter_id
@@ -842,7 +845,7 @@ mod voters {
         let room_name = sqlx::query!(
             r#"
         SELECT name
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1 AND status = 0
             "#,
             voter.room_id
@@ -858,7 +861,7 @@ mod voters {
         let voter_count = sqlx::query!(
             r#"
         SELECT count(id) as count
-        FROM new_voters
+        FROM voters
         WHERE room_id = ?1
             "#,
             voter.room_id
@@ -936,8 +939,8 @@ mod voters {
         let room = sqlx::query!(
             r#"
         SELECT id, admin_code
-        FROM new_rooms
-        WHERE id = (SELECT room_id FROM new_voters WHERE id = ?1)
+        FROM rooms
+        WHERE id = (SELECT room_id FROM voters WHERE id = ?1)
             "#,
             voter_id
         )
@@ -953,7 +956,7 @@ mod voters {
         }
 
         sqlx::query!(
-            r#"UPDATE new_voters SET approved = true WHERE id = ?1"#,
+            r#"UPDATE voters SET approved = true WHERE id = ?1"#,
             voter_id
         )
         .execute(&conn)
@@ -984,7 +987,7 @@ mod voters {
         let voter = sqlx::query!(
             r#"
         SELECT voter_code, approved, room_id
-        FROM new_voters
+        FROM voters
         WHERE id = ?1
             "#,
             voter_id
@@ -1003,7 +1006,7 @@ mod voters {
         let room_options = sqlx::query!(
             r#"
         SELECT options
-        FROM new_rooms
+        FROM rooms
         WHERE id = ?1 AND status = 1
             "#,
             voter.room_id
@@ -1028,7 +1031,7 @@ mod voters {
 
         let _ = sqlx::query!(
             r#"
-        UPDATE new_voters
+        UPDATE voters
         SET options = ?1
         WHERE id = ?2
             "#,
@@ -1050,7 +1053,7 @@ mod voters {
             if let Ok(votes) = sqlx::query!(
                 r#"
             SELECT count(id) as count
-            FROM new_voters
+            FROM voters
             WHERE room_id = ?1 AND options NOT NULL
                 "#,
                 voter.room_id
@@ -1263,7 +1266,7 @@ mod events {
                 let room = sqlx::query!(
                     r#"
                 SELECT id, admin_code
-                FROM new_rooms
+                FROM rooms
                 WHERE id = ?1
                     "#,
                     room_id
@@ -1288,7 +1291,7 @@ mod events {
             Some(voter_code) => sqlx::query!(
                 r#"
             SELECT id
-            FROM new_voters
+            FROM voters
             WHERE voter_code = ?1
                 "#,
                 voter_code
