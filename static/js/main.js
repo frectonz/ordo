@@ -20,7 +20,7 @@ function homepage() {
 
     div.innerHTML = `
     <input class="input-text strech" name="option" required="true" placeholder="a choice">
-    <button class="button w-fit" type="button">DELETE</button>
+    <button class="button w-fit delete" type="button">DELETE</button>
     `;
 
     return div;

@@ -157,11 +157,8 @@ mod homepage {
                     label."text-md" { "OPTIONS" }
 
                     div."grid gap-sm" id="options" {
-                        @for _ in 0..3 {
-                            div."flex gap-sm" {
-                                input."input-text strech" name="options" required="true" placeholder="a choice" {}
-                                button."button w-fit delete" type="button" { "DELETE" }
-                            }
+                        @for _ in 0..2 {
+                            input."input-text w-full" name="options" required="true" placeholder="a choice" {}
                         }
                     }
 
@@ -1277,7 +1274,7 @@ mod names {
     }
 
     pub fn end_vote_url(room_id: i64) -> String {
-        format!("/rooms/{room_id}/start")
+        format!("/rooms/{room_id}/end")
     }
 
     pub fn room_listen_url(room_id: i64) -> String {
