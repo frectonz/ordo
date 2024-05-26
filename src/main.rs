@@ -15,9 +15,8 @@ async fn main() -> color_eyre::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    let db = env::var("DATABASE_URL")?;
-
-    let conn: Pool<Sqlite> = Pool::connect(&db).await?;
+    let db_url = env::var("DATABASE_URL")?;
+    let conn: Pool<Sqlite> = Pool::connect(&db_url).await?;
 
     sqlx::migrate!().run(&conn).await?;
 

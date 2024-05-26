@@ -24,14 +24,29 @@
           inherit system overlays;
         };
 
-        craneLib = crane.lib.${system};
-        src = craneLib.cleanCargoSource ./.;
+        rustToolchain = pkgs.rust-bin.stable.latest.default;
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: type:
+            (pkgs.lib.hasSuffix "\.sql" path) ||
+            (craneLib.filterCargoSources path type)
+          ;
+        };
         commonArgs = { inherit src; };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         bin = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
+
+          nativeBuildInputs = [ pkgs.sqlx-cli ];
+
+          preBuild = ''
+            export DATABASE_URL=sqlite:./db.sqlite3
+            sqlx database create
+            sqlx migrate run
+          '';
         });
       in
       with pkgs;
@@ -47,7 +62,7 @@
             sqlx-cli
             cargo-watch
             rust-analyzer
-            rust-bin.stable.latest.default
+            rustToolchain
             nodePackages.typescript-language-server
             nodePackages.vscode-langservers-extracted
           ];
