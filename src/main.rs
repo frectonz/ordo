@@ -15,7 +15,9 @@ async fn main() -> color_eyre::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    let db_url = env::var("DATABASE_URL")?;
+    let db_url = env::var("DATABASE_URL")
+        .ok()
+        .unwrap_or("sqlite:/data/ordo.db".to_owned());
     let conn: Pool<Sqlite> = Pool::connect(&db_url).await?;
 
     sqlx::migrate!().run(&conn).await?;
@@ -29,7 +31,7 @@ async fn main() -> color_eyre::Result<()> {
         .or(routes)
         .recover(rejections::handle_rejection);
 
-    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
 
     Ok(())
 }
