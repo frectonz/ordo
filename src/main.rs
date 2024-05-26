@@ -187,7 +187,7 @@ mod homepage {
 }
 
 mod rooms {
-    use std::time::Duration;
+    use std::{collections::HashMap, time::Duration};
 
     use crate::{
         events::{Broadcasters, RoomEvents},
@@ -197,7 +197,7 @@ mod rooms {
         },
         utils, views,
         voters::{self, VoterPage},
-        voting::{self, VoteAdminPage},
+        voting::{self, ResultPage, Score, VoteAdminPage},
         with_state,
     };
 
@@ -253,11 +253,20 @@ mod rooms {
             .and_then(start_vote)
             .with(warp::trace::named("start_vote"));
 
+        let end_vote = with_state(conn.clone())
+            .and(with_state(broadcasters.clone()))
+            .and(warp::path!("rooms" / i64 / "end"))
+            .and(warp::put())
+            .and(warp::cookie::cookie(names::ROOM_ADMIN_COOKIE_NAME))
+            .and_then(end_vote)
+            .with(warp::trace::named("start_vote"));
+
         create_room
             .or(get_room)
             .or(join_room_page)
             .or(join_room)
             .or(start_vote)
+            .or(end_vote)
     }
 
     async fn create_room(
@@ -662,6 +671,100 @@ mod rooms {
 
         Ok(views::titled("Vote Started", page))
     }
+
+    async fn end_vote(
+        conn: sqlx::Pool<sqlx::Sqlite>,
+        broadcasters: Broadcasters,
+        room_id: i64,
+        admin_code: String,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        let room = sqlx::query!(
+            r#"
+        SELECT admin_code, name, options
+        FROM new_rooms
+        WHERE id = ?1 AND status = 1
+            "#,
+            room_id
+        )
+        .fetch_one(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting room: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        if admin_code != room.admin_code {
+            return Err(warp::reject::custom(NotAnAdmin));
+        }
+
+        sqlx::query!(
+            r#"
+        UPDATE new_rooms
+        SET status = 2
+        WHERE id = ?1
+            "#,
+            room_id
+        )
+        .execute(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while setting room status to `ended`: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        let votes = sqlx::query!(
+            r#"
+        SELECT options
+        FROM new_voters
+        WHERE new_voters.room_id = ?1 AND new_voters.approved = TRUE AND options NOT NULL
+            "#,
+            room_id
+        )
+        .fetch_all(&conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("error while getting voters: {e}");
+            warp::reject::custom(InternalServerError)
+        })?;
+
+        let scores = votes
+            .into_iter()
+            .map(|r| r.options.unwrap())
+            .map(|r| serde_json::from_str::<Vec<String>>(&r).unwrap())
+            .fold(HashMap::<String, usize>::new(), |map, options| {
+                let options_len = options.len();
+                options
+                    .into_iter()
+                    .enumerate()
+                    .fold(map, |mut map, (idx, choice)| {
+                        let curr_score = options_len - idx;
+                        map.entry(choice)
+                            .and_modify(|score| *score += curr_score)
+                            .or_insert(curr_score);
+                        map
+                    })
+            });
+
+        let mut scores = scores.into_iter().collect::<Vec<_>>();
+        scores.sort_by_key(|(_, score)| *score);
+        scores.reverse();
+
+        tokio::spawn(async move {
+            broadcasters
+                .send_event(room_id, RoomEvents::VoteEnded)
+                .await;
+        });
+
+        let page = voting::result_page(ResultPage {
+            room_name: room.name,
+            scores: scores
+                .into_iter()
+                .map(|(option, score)| Score { option, score })
+                .collect(),
+        });
+
+        Ok(views::titled("Vote Ended", page))
+    }
 }
 
 mod voters {
@@ -818,6 +921,8 @@ mod voters {
                 div hx-swap="innerHTML" sse-swap=(names::VOTE_STARTED_EVENT) {
                     div."alert" { "VOTES WILL START SHORTLY." }
                 }
+
+                div hx-swap="innerHTML" sse-swap=(names::VOTE_ENDED_EVENT) { }
             }
         }
     }
@@ -1031,6 +1136,43 @@ mod voting {
             }
         }
     }
+
+    pub struct ResultPage {
+        pub room_name: String,
+        pub scores: Vec<Score>,
+    }
+
+    pub struct Score {
+        pub option: String,
+        pub score: usize,
+    }
+
+    pub fn result_page(page: ResultPage) -> Markup {
+        html! {
+            section."grid gap-lg w-800" {
+                h1."text-lg" { "RESULTS FOR \"" (page.room_name) "\"" }
+
+                section."grid gap-sm" {
+                    div."big-small gap-sm" {
+                        p."code text-sm" { "OPTION" }
+                        p."code text-sm" { "SCORE" }
+                    }
+
+                    @for score in page.scores {
+                        div."big-small gap-sm" {
+                            div."card" {
+                                p."text-sm" { (score.option) }
+                            }
+
+                            div."card card--secondary" {
+                                p."text-sm" { (utils::format_num(score.score as i32)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 mod events {
@@ -1234,6 +1376,10 @@ mod events {
                             p."stat__desc" { "recorded " (utils::pluralize(votes, "vote", "votes")) }
                         }.into_string()),
 
+                    (VoteEnded, None, Some(_)) => Event::default()
+                        .event(names::VOTE_ENDED_EVENT)
+                        .data(html! { div."alert" { "VOTES HAVE ENDED." } }.into_string()),
+
                     _ => Event::default().event(names::PING_EVENT),
                 }
             })
@@ -1301,6 +1447,7 @@ mod names {
     pub const NEW_VOTER_EVENT: &str = "voter";
 
     pub const VOTE_STARTED_EVENT: &str = "vote-started";
+    pub const VOTE_ENDED_EVENT: &str = "vote-ended";
     pub const VOTE_COUNT_EVENT: &str = "vote-count";
 
     pub const PING_EVENT: &str = "ping";

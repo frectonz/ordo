@@ -230,3 +230,8 @@ a {
   background-color: var(--secondary-color);
   opacity: 70%;
 }
+
+.big-small {
+  display: grid;
+  grid-template-columns: 80% 20%;
+}
