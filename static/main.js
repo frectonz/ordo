@@ -19,7 +19,7 @@ function homepage() {
     div.classList.add("gap-sm");
 
     div.innerHTML = `
-    <input class="input-text strech" name="option" required="true" placeholder="a choice">
+    <input class="input-text strech" name="options" required="true" placeholder="a choice">
     <button class="button w-fit delete" type="button">DELETE</button>
     `;
 
