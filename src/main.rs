@@ -478,6 +478,8 @@ mod rooms {
         let voter_count = utils::format_num(room.voters.len() as i32);
         let voter_label = utils::pluralize(room.voters.len() as i32, "voter", "voters");
 
+        let approved_voters_count = room.voters.iter().filter(|v| v.approved).count();
+
         html! {
             section."grid gap-lg w-800" hx-ext="sse" sse-connect=(names::room_listen_url(room.id)) {
                 h1."text-lg" { (room.name) }
@@ -500,7 +502,17 @@ mod rooms {
                     }
                 }
 
-                button."button text-lg align-left" hx-put=(names::start_vote_url(room.id)) hx-target="main" hx-swap="innerHTML" { "START VOTE" }
+                @if approved_voters_count > 0 {
+                    button."button text-lg align-left"
+                        hx-put=(names::start_vote_url(room.id))
+                        hx-target="main"
+                        hx-swap="innerHTML" { "START VOTE" }
+                } @else {
+                    button."button text-lg align-left"
+                        disabled
+                        sse-swap=(names::VOTE_STARTABLE_EVENT)
+                        hx-swap="outerHTML" { "APPROVE AT LEAST ONE VOTER TO BE ABLE TO START VOTES." }
+                }
 
                 section."grid gap-md" hx-swap="beforeend" sse-swap=(names::NEW_VOTER_EVENT) {
                     h2."text-md" { "VOTERS" }
@@ -961,7 +973,7 @@ mod voters {
                         span."code" { (voter.id) }
                         @if voter.approved {
                             div."alert" { "VOTER HAS BEEN APPROVED." }
-                        } else {
+                        } @else {
                             div."alert" hx-swap="outerHTML" sse-swap=(names::voter_approved_event(voter.id)) {
                                 "WAITING TO BE APPROVED."
                             }
@@ -1015,6 +1027,9 @@ mod voters {
         })?;
 
         tokio::spawn(async move {
+            broadcasters
+                .send_event(room.id, RoomEvents::VoteStartable(room.id))
+                .await;
             broadcasters
                 .send_event(room.id, RoomEvents::VoterApproved(voter_id))
                 .await;
@@ -1247,6 +1262,7 @@ mod events {
         NewVoter(i64),
         NewVoterCount(i32),
         VoterApproved(i64),
+        VoteStartable(i64),
         VoteStarted(Vec<String>),
         VoteEnded,
         NewVote(i64),
@@ -1438,6 +1454,15 @@ mod events {
                         .event(names::VOTE_ENDED_EVENT)
                         .data(html! { div."alert" { "VOTES HAVE ENDED." } }.into_string()),
 
+                    (VoteStartable(room_id), Some(_), None) => Event::default()
+                        .event(names::VOTE_STARTABLE_EVENT)
+                        .data(html! {
+                            button."button text-lg align-left"
+                                hx-put=(names::start_vote_url(room_id))
+                                hx-target="main"
+                                hx-swap="innerHTML" { "START VOTE" }
+                        }.into_string()),
+
                     _ => Event::default().event(names::PING_EVENT),
                 }
             })
@@ -1507,6 +1532,7 @@ mod names {
     pub const VOTE_STARTED_EVENT: &str = "vote-started";
     pub const VOTE_ENDED_EVENT: &str = "vote-ended";
     pub const VOTE_COUNT_EVENT: &str = "vote-count";
+    pub const VOTE_STARTABLE_EVENT: &str = "vote-startable";
 
     pub const PING_EVENT: &str = "ping";
 
