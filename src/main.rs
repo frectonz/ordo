@@ -1128,6 +1128,10 @@ mod voters {
                 broadcasters
                     .send_event(voter.room_id, RoomEvents::NewVoteCount(votes))
                     .await;
+
+                broadcasters
+                    .send_event(voter.room_id, RoomEvents::VoteEndable(voter.room_id))
+                    .await;
             }
         });
 
@@ -1179,7 +1183,17 @@ mod voting {
                     }
                 }
 
-                button."button text-lg align-left" hx-put=(names::end_vote_url(page.room_id)) hx-target="main" hx-swap="innerHTML" { "END VOTE" }
+                @if page.recorded_votes > 0 {
+                    button."button text-lg align-left"
+                        hx-put=(names::end_vote_url(page.room_id))
+                        hx-target="main"
+                        hx-swap="innerHTML" { "END VOTE" }
+                } @else {
+                    button."button text-lg align-left"
+                        disabled
+                        sse-swap=(names::VOTE_ENDABLE_EVENT)
+                        hx-swap="outerHTML" { "AT LEAST ONE RECORDED VOTE REQUIRED TO BE ABLE TO END VOTES." }
+                }
 
                 section."grid gap-md" {
                     h2."text-md" { "APPROVED VOTERS" }
@@ -1263,6 +1277,7 @@ mod events {
         NewVoterCount(i32),
         VoterApproved(i64),
         VoteStartable(i64),
+        VoteEndable(i64),
         VoteStarted(Vec<String>),
         VoteEnded,
         NewVote(i64),
@@ -1463,6 +1478,15 @@ mod events {
                                 hx-swap="innerHTML" { "START VOTE" }
                         }.into_string()),
 
+                    (VoteEndable(room_id), Some(_), None) => Event::default()
+                        .event(names::VOTE_ENDABLE_EVENT)
+                        .data(html! {
+                            button."button text-lg align-left"
+                                hx-put=(names::end_vote_url(room_id))
+                                hx-target="main"
+                                hx-swap="innerHTML" { "END VOTE" }
+                        }.into_string()),
+
                     _ => Event::default().event(names::PING_EVENT),
                 }
             })
@@ -1533,6 +1557,7 @@ mod names {
     pub const VOTE_ENDED_EVENT: &str = "vote-ended";
     pub const VOTE_COUNT_EVENT: &str = "vote-count";
     pub const VOTE_STARTABLE_EVENT: &str = "vote-startable";
+    pub const VOTE_ENDABLE_EVENT: &str = "vote-endable";
 
     pub const PING_EVENT: &str = "ping";
 
