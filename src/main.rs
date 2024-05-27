@@ -50,18 +50,50 @@ fn with_state<T: Clone + Send>(
 }
 
 mod statics {
-    use std::path::Path;
+    use std::{path::Path, time::SystemTime};
 
     use include_dir::{include_dir, Dir};
-    use warp::Filter;
+    use warp::{
+        http::{
+            header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH},
+            Response, StatusCode,
+        },
+        reply::Reply,
+        Filter,
+    };
 
     static STATIC_DIR: Dir = include_dir!("static");
 
-    async fn send_file(path: warp::path::Tail) -> Result<impl warp::Reply, warp::Rejection> {
+    async fn send_file(
+        path: warp::path::Tail,
+        last_etag: Option<u64>,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
         let path = Path::new(path.as_str());
         let file = STATIC_DIR
             .get_file(path)
             .ok_or_else(warp::reject::not_found)?;
+
+        let last_accessed = file.metadata().and_then(|m| {
+            m.modified()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .ok()
+        });
+
+        let not_modified = last_etag
+            .and_then(|last_etag| last_accessed.map(|last_accessed| last_etag == last_accessed))
+            .unwrap_or(false);
+
+        if not_modified {
+            let mut builder = Response::builder().status(StatusCode::NOT_MODIFIED);
+
+            if let Some(last_accessed) = last_accessed {
+                builder = builder.header(ETAG, last_accessed);
+            }
+            let resp = builder.body("").unwrap();
+
+            return Ok(resp.into_response());
+        };
 
         let content_type = match file.path().extension() {
             Some(ext) if ext == "css" => "text/css",
@@ -70,15 +102,22 @@ mod statics {
             _ => "application/octet-stream",
         };
 
-        Ok(warp::reply::with_header(
-            file.contents(),
-            "content-type",
-            content_type,
-        ))
+        let mut builder = Response::builder()
+            .header(CONTENT_TYPE, content_type)
+            .header(CACHE_CONTROL, "max-age=3600, must-revalidate");
+
+        if let Some(last_accessed) = last_accessed {
+            builder = builder.header(ETAG, last_accessed);
+        }
+        let resp = builder.body(file.contents()).unwrap();
+
+        Ok(resp.into_response())
     }
 
     pub fn routes() -> impl Filter<Extract = (impl warp::Reply,), Error = warp::Rejection> + Clone {
-        warp::path::tail().and_then(send_file)
+        warp::path::tail()
+            .and(warp::header::optional::<u64>(IF_NONE_MATCH.as_str()))
+            .and_then(send_file)
     }
 }
 
