@@ -36,6 +36,7 @@ async fn main() -> color_eyre::Result<()> {
 
     let routes = static_files
         .or(routes)
+        .with(warp::compression::gzip())
         .recover(rejections::handle_rejection);
 
     warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
