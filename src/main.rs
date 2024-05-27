@@ -1635,8 +1635,29 @@ mod rejections {
             .find::<warp::filters::body::BodyDeserializeError>()
             .is_some()
         {
-            message = "BAD_REQUEST";
             code = StatusCode::BAD_REQUEST;
+            message = "BAD_REQUEST";
+        } else if let Some(NotVoter) = err.find() {
+            code = StatusCode::UNAUTHORIZED;
+            message = "NOT_VOTER";
+        } else if let Some(EmptyName) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "EMPTY_NAME";
+        } else if let Some(NoOptions) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "NO_OPTIONS";
+        } else if let Some(EmptyOption) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "EMPTY_OPTION";
+        } else if let Some(NotRoomAdmin) = err.find() {
+            code = StatusCode::UNAUTHORIZED;
+            message = "NOT_ROOM_ADMIN";
+        } else if let Some(UnknownOptions) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "UNKNOWN_OPTIONS";
+        } else if let Some(InternalServerError) = err.find() {
+            code = StatusCode::INTERNAL_SERVER_ERROR;
+            message = "INTERNAL_SERVER_ERROR";
         } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
             code = StatusCode::METHOD_NOT_ALLOWED;
             message = "METHOD_NOT_ALLOWED";
@@ -1653,12 +1674,16 @@ mod rejections {
         views::page(
             "Error",
             html! {
-                div."error" {
-                    div {
-                        h1."bold" {"ERROR"}
-                        p."regular" {(message)}
+                section."grid gap-lg w-800" {
+                    div."two-cols gap-md" {
+                        div."card gap gap-md" {
+                            h1."text-lg" {"ERROR"}
+                            h3."text-sm" {(message)}
+                        }
+                        div."center card card--secondary" {
+                            img."w-200" src="/static/img/death.svg";
+                        }
                     }
-                    img src="/static/img/death.svg";
                 }
             },
         )
