@@ -1549,6 +1549,12 @@ mod views {
         }
     }
 
+    fn icon() -> Markup {
+        html! {
+            link rel="icon" href="/static/img/icon.svg" type="image/svg+xml" {}
+        }
+    }
+
     fn header() -> Markup {
         html! {
             header."header" {
@@ -1572,6 +1578,7 @@ mod views {
                 (font())
                 (css())
                 (js())
+                (icon())
 
                 title { (format!("{title} - ORDO")) }
             }
