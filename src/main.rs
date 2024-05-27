@@ -36,7 +36,6 @@ async fn main() -> color_eyre::Result<()> {
 
     let routes = static_files
         .or(routes)
-        .with(warp::compression::gzip())
         .recover(rejections::handle_rejection);
 
     warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
@@ -129,6 +128,7 @@ pub fn routes(
     homepage::route(conn.clone())
         .or(rooms::route(conn.clone(), broadcasters.clone()))
         .or(voters::route(conn.clone(), broadcasters.clone()))
+        .with(warp::compression::gzip())
         .or(events::route(conn, broadcasters))
 }
 
@@ -382,13 +382,13 @@ mod rooms {
             broadcasters.end_stream(room_id).await;
         });
 
-        let set_cookie_value = format!(
-            "{}={admin_code}; HttpOnly; Max-Age=3600; Secure; Path=/",
+        let cookie = format!(
+            "{}={admin_code}; HttpOnly; Max-Age=3600; Secure; Path=/; SameSite=Strict",
             names::ROOM_ADMIN_COOKIE_NAME
         );
 
         let resp = Response::builder()
-            .header(SET_COOKIE, set_cookie_value)
+            .header(SET_COOKIE, cookie)
             .header("HX-Replace-Url", names::room_page_url(room_id))
             .body(
                 views::titled(
@@ -630,13 +630,13 @@ mod rooms {
                 approved: false,
             }),
         );
-        let set_cookie_value = format!(
-            "{}={voter_code}; HttpOnly; Max-Age=3600; Secure; Path=/",
+        let cookie = format!(
+            "{}={voter_code}; HttpOnly; Max-Age=3600; Secure; Path=/; SameSite=Strict",
             names::VOTER_COOKIE_NAME
         );
 
         let resp = Response::builder()
-            .header(SET_COOKIE, set_cookie_value)
+            .header(SET_COOKIE, cookie)
             .header("HX-Replace-Url", names::voter_page_url(voter_id))
             .body(page.into_string())
             .unwrap();
@@ -1365,6 +1365,8 @@ mod events {
             })
             .map(move |event| {
                 use RoomEvents::*;
+                tracing::debug!("new event received: {event:?}");
+
                 match (event, admin, voter) {
                     (NewVoterCount(count), Some(_), None) | (NewVoterCount(count), None, Some(_)) => {
                         Event::default()
@@ -1531,15 +1533,6 @@ mod views {
         }
     }
 
-    fn htmx() -> Markup {
-        html! {
-            script src="https://unpkg.com/htmx.org@1.9.12" {}
-            script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js" {}
-            script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/json-enc.js" {}
-            script src="https://unpkg.com/sortablejs@1.15.2" {}
-        }
-    }
-
     fn css() -> Markup {
         html! {
             link rel="stylesheet" href="/static/style.css";
@@ -1548,6 +1541,10 @@ mod views {
 
     fn js() -> Markup {
         html! {
+            script src="/static/vendor/htmx/htmx.min.js" {}
+            script src="/static/vendor/htmx/ext/sse.js" {}
+            script src="/static/vendor/htmx/ext/json-enc.js" {}
+            script src="/static/vendor/Sortable.min.js" {}
             script src="/static/main.js" {}
         }
     }
@@ -1573,7 +1570,6 @@ mod views {
                 meta charset="utf-8";
 
                 (font())
-                (htmx())
                 (css())
                 (js())
 
