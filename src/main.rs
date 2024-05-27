@@ -1142,7 +1142,7 @@ mod voters {
 }
 
 mod voting {
-    use maud::{html, Markup};
+    use maud::{html, Markup, PreEscaped};
 
     use crate::{names, utils};
 
@@ -1228,6 +1228,50 @@ mod voting {
     }
 
     pub fn result_page(page: ResultPage) -> Markup {
+        let labels = page
+            .scores
+            .iter()
+            .map(|Score { option, .. }| format!("\"{option}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let data = page
+            .scores
+            .iter()
+            .map(|s| s.score.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let chart_js = format!(
+            r#"
+        <script>
+            const canvas = document.querySelector('canvas');
+
+            const data = {{
+              labels: [{labels}],
+              datasets: [{{
+                label: 'SCORES',
+                data: [{data}],
+                borderWidth: 1
+              }}]
+            }};
+
+            const config = {{
+              type: 'bar',
+              data: data,
+              options: {{
+                scales: {{
+                  y: {{
+                    beginAtZero: true
+                  }}
+                }}
+              }},
+            }};
+
+            new Chart(canvas, config);
+        </script>
+            "#
+        );
+
         html! {
             section."grid gap-lg w-800" {
                 h1."text-lg" { "RESULTS FOR \"" (page.room_name) "\"" }
@@ -1250,6 +1294,10 @@ mod voting {
                         }
                     }
                 }
+
+                canvas."card card--secondary" {}
+
+                (PreEscaped(chart_js))
             }
         }
     }
@@ -1596,6 +1644,7 @@ mod views {
             script src="/static/vendor/htmx/ext/sse.js" {}
             script src="/static/vendor/htmx/ext/json-enc.js" {}
             script src="/static/vendor/Sortable.min.js" {}
+            script src="https://cdn.jsdelivr.net/npm/chart.js" {}
             script src="/static/main.js" {}
         }
     }
