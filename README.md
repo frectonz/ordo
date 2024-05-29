@@ -47,8 +47,8 @@ By using Nix to produce the Docker images instead of a traditional Dockerfile, t
 [ordo on the docker hub](https://hub.docker.com/r/frectonz/ordo)
 
 ```bash
-docker pull frectonz/ordo:0.1.9
-docker run -p 3030:3030 frectonz/ordo:0.1.9
+docker pull frectonz/ordo:0.1.10
+docker run -p 3030:3030 frectonz/ordo:0.1.10
 ```
 
 ## Setting up a Development Environment
