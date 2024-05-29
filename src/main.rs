@@ -351,11 +351,7 @@ mod rooms {
             broadcasters.end_stream(room_id).await;
         });
 
-        let cookie = format!(
-            "{}={admin_code}; HttpOnly; Max-Age=3600; Secure; Path=/; SameSite=Strict",
-            names::ROOM_ADMIN_COOKIE_NAME
-        );
-
+        let cookie = utils::cookie(names::ROOM_ADMIN_COOKIE_NAME, &admin_code);
         let resp = Response::builder()
             .header(SET_COOKIE, cookie)
             .header("HX-Replace-Url", names::room_page_url(room_id))
@@ -611,11 +607,8 @@ mod rooms {
                 approved: false,
             }),
         );
-        let cookie = format!(
-            "{}={voter_code}; HttpOnly; Max-Age=3600; Secure; Path=/; SameSite=Strict",
-            names::VOTER_COOKIE_NAME
-        );
 
+        let cookie = utils::cookie(names::VOTER_COOKIE_NAME, &voter_code);
         let resp = Response::builder()
             .header(SET_COOKIE, cookie)
             .header("HX-Replace-Url", names::voter_page_url(voter_id))
@@ -932,8 +925,8 @@ mod voters {
                 h1."text-lg" { (voter.room_name) }
 
                 section."two-cols" {
-                    div."card card--secondary stat" {
-                        p."stat__num" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT) { (voter_count) }
+                    div."card card--secondary stat" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT) {
+                        p."stat__num" { (voter_count) }
                         p."stat__desc" { (voter_label) " in room" }
                     }
 
@@ -1527,6 +1520,10 @@ mod utils {
 
     pub fn generate_ulid() -> String {
         Ulid::new().to_string()
+    }
+
+    pub fn cookie(name: &str, value: &str) -> String {
+        format!("{name}={value}; HttpOnly; Max-Age=3600; Secure; Path=/; SameSite=Strict")
     }
 }
 
