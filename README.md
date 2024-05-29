@@ -26,6 +26,7 @@ According to Google Translate, the English word 'rank' or 'order' translates to 
 - [Tokio](https://tokio.rs/)
 - [Warp](https://github.com/seanmonstar/warp)
 - [Maud](https://maud.lambda.xyz/)
+- [HTMX](https://htmx.org/)
 - [SQLx](https://github.com/launchbadge/sqlx)
 - [SQLite](https://sqlite.org/)
 - [Nix](https://nixos.org/)
