@@ -115,20 +115,20 @@ The voter page will be updated to show a drag-and-drop interface, enabling the v
 
 After the voter has submitted their vote.
 
-[thank you](./screenshots/11.png)
+![thank you](./screenshots/11.png)
 
 On the room admin page, the recorded votes UI will be updated to reflect the newly submitted vote. Additionally, the "END VOTE" button will become enabled now that we have received a vote. Furthermore, the voting status for the respective voter will be updated to "VOTED."
 
-[room admin page with one recorded vote](./screenshots/12.png)
-[room admin page with two recorded votes](./screenshots/13.png)
+![room admin page with one recorded vote](./screenshots/12.png)
+![room admin page with two recorded votes](./screenshots/13.png)
 
 After the room admin clicks on the "END VOTE" button, every voter will notified that the voting process has concluded.
 
-[vote ended voter page](./screenshots/14.png)
+![vote ended voter page](./screenshots/14.png)
 
 Finally, the room admin can access the results page, which displays all the scores for each choice along with a bar chart illustrating the distribution of the votes.
 
-[results](./screenshots/15.png)
+![results](./screenshots/15.png)
 
 ## LICENSE
 
