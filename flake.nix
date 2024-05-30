@@ -74,8 +74,12 @@
             cargo-watch
             rust-analyzer
             rustToolchain
+
             nodePackages.typescript-language-server
             nodePackages.vscode-langservers-extracted
+
+            nodejs
+            nodePackages.pnpm
           ];
 
           shellHook = ''

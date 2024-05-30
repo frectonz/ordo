@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "format": "prettier . --write"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.1",
+    "@types/node": "^20.12.13",
+    "prettier": "^3.2.5"
+  }
+}

@@ -165,7 +165,12 @@ mod homepage {
 
     fn create_room_form() -> Markup {
         html! {
-            form."w-full grid gap-md" hx-post=(names::rooms_url()) hx-ext="json-enc" hx-target="main" hx-swap="innerHTML" {
+            form."w-full grid gap-md"
+                data-testid="create-room-form"
+                hx-post=(names::rooms_url())
+                hx-ext="json-enc"
+                hx-target="main"
+                hx-swap="innerHTML" {
                 div."grid gap-sm" {
                     label."text-md" { "NAME" }
                     input."input-text" name="name" required="true" min="2" placeholder="my super cool vote" {}
