@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "format": "prettier . --write"
+    "format": "prettier . --write",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui-host=localhost"
   },
   "devDependencies": {
     "@playwright/test": "^1.44.1",
