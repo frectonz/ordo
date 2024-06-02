@@ -24,6 +24,20 @@ test("adds new options", async ({ page }) => {
   expect((await page.getByPlaceholder("a choice").all()).length).toBe(4);
 });
 
+test("delete options", async ({ page }) => {
+  await page.goto("/");
+
+  const addOption = page.getByText("ADD OPTION");
+
+  expect((await page.getByPlaceholder("a choice").all()).length).toBe(2);
+  await addOption.click();
+  expect((await page.getByPlaceholder("a choice").all()).length).toBe(3);
+
+  await page.getByText("DELETE").click();
+
+  expect((await page.getByPlaceholder("a choice").all()).length).toBe(2);
+});
+
 async function createRoom(page: Page, name: string, choices: string[]) {
   await page.getByPlaceholder("my super cool vote").fill(name);
 
