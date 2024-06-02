@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 
 test("has a form", async ({ page }) => {
   await page.goto("/");
@@ -22,4 +22,37 @@ test("adds new options", async ({ page }) => {
   expect((await page.getByPlaceholder("a choice").all()).length).toBe(3);
   await button.click();
   expect((await page.getByPlaceholder("a choice").all()).length).toBe(4);
+});
+
+async function createRoom(page: Page, name: string, choices: string[]) {
+  await page.getByPlaceholder("my super cool vote").fill(name);
+
+  const button = page.getByText("ADD OPTION");
+  for (let i = 2; i < choices.length; i++) {
+    await button.click();
+  }
+
+  const options = page.getByPlaceholder("a choice");
+  for (let i = 0; i < choices.length; i++) {
+    await options.nth(i).fill(choices[i]);
+  }
+
+  await page.getByText("CREATE ROOM").click();
+  await page.waitForURL("/rooms/*");
+}
+
+test("create a new room", async ({ page }) => {
+  await page.goto("/");
+
+  expect(await page.title()).toBe("Home - ORDO");
+
+  const name = "best always sunny character";
+  const characters = ["Charlie", "Frank", "Sweet Dee", "Dennis", "Mac"];
+  await createRoom(page, name, characters);
+
+  await expect(page.getByText(name)).toBeVisible();
+  for (const c of characters) {
+    await expect(page.getByText(c)).toBeVisible();
+  }
+  expect(await page.title()).toBe("Admin - ORDO");
 });
