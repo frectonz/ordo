@@ -394,7 +394,10 @@ mod rooms {
         .await
         .map_err(|e| {
             tracing::error!("error while getting room: {e}");
-            warp::reject::custom(rejections::InternalServerError)
+            match e {
+                sqlx::Error::RowNotFound => warp::reject::custom(rejections::RoomNotFound),
+                _ => warp::reject::custom(rejections::InternalServerError),
+            }
         })?;
 
         let voters = sqlx::query!(
@@ -1698,6 +1701,7 @@ mod rejections {
         NoOptions,
         EmptyOption,
         NotRoomAdmin,
+        RoomNotFound,
         UnknownOptions,
         InternalServerError
     );
@@ -1730,6 +1734,9 @@ mod rejections {
         } else if let Some(NotRoomAdmin) = err.find() {
             code = StatusCode::UNAUTHORIZED;
             message = "NOT_ROOM_ADMIN";
+        } else if let Some(RoomNotFound) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "ROOM_NOT_FOUND";
         } else if let Some(UnknownOptions) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "UNKNOWN_OPTIONS";
