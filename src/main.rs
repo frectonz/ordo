@@ -808,7 +808,7 @@ mod voters {
     use crate::{
         events::{Broadcasters, RoomEvents},
         names,
-        rejections::{InternalServerError, NotRoomAdmin, NotVoter, UnknownOptions},
+        rejections::{InternalServerError, NotRoomAdmin, NotVoter, UnknownOptions, VoterNotFound},
         utils, views, with_state,
     };
 
@@ -865,7 +865,10 @@ mod voters {
         .await
         .map_err(|e| {
             tracing::error!("error while getting voter: {e}");
-            warp::reject::custom(InternalServerError)
+            match e {
+                sqlx::Error::RowNotFound => warp::reject::custom(VoterNotFound),
+                _ => warp::reject::custom(InternalServerError),
+            }
         })?;
 
         if voter_code != voter.voter_code {
@@ -1702,6 +1705,7 @@ mod rejections {
         EmptyOption,
         NotRoomAdmin,
         RoomNotFound,
+        VoterNotFound,
         UnknownOptions,
         InternalServerError
     );
@@ -1737,6 +1741,9 @@ mod rejections {
         } else if let Some(RoomNotFound) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "ROOM_NOT_FOUND";
+        } else if let Some(VoterNotFound) = err.find() {
+            code = StatusCode::BAD_REQUEST;
+            message = "VOTER_NOT_FOUND";
         } else if let Some(UnknownOptions) = err.find() {
             code = StatusCode::BAD_REQUEST;
             message = "UNKNOWN_OPTIONS";
