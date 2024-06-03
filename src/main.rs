@@ -1746,6 +1746,12 @@ mod rejections {
         } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
             code = StatusCode::METHOD_NOT_ALLOWED;
             message = "METHOD_NOT_ALLOWED";
+        } else if err
+            .find::<warp::reject::InvalidHeader>()
+            .is_some_and(|e| e.name() == warp::http::header::COOKIE)
+        {
+            code = StatusCode::BAD_REQUEST;
+            message = "COOKIE_NOT_AVAILABLE";
         } else {
             tracing::error!("unhandled rejection: {:?}", err);
             code = StatusCode::INTERNAL_SERVER_ERROR;
