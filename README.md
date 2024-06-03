@@ -1,5 +1,4 @@
 # ordo
-
 Effortlessly set up and conduct ranked choice voting.
 
 ## What is Ranked Choice Voting?
@@ -47,8 +46,8 @@ By using Nix to produce the Docker images instead of a traditional Dockerfile, t
 [ordo on the docker hub](https://hub.docker.com/r/frectonz/ordo)
 
 ```bash
-docker pull frectonz/ordo:0.1.11
-docker run -p 3030:3030 frectonz/ordo:0.1.11
+docker pull frectonz/ordo:0.1.12
+docker run -p 3030:3030 frectonz/ordo:0.1.12
 ```
 
 ## Setting up a Development Environment
