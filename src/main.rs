@@ -479,7 +479,7 @@ mod rooms {
 
                 section."two-cols" {
                     div."card card--secondary stat" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT){
-                        p."stat__num" { (voter_count) }
+                        p."stat__num" data-testid="voter-count" { (voter_count) }
                         p."stat__desc" { (voter_label) " in room" }
                     }
 
@@ -510,7 +510,7 @@ mod rooms {
 
                     span."strech code" {
                         span { "NEW VOTER LINK" }
-                        span { "/rooms/" (room.id) "/join" }
+                        span data-testid="voter-link" { "/rooms/" (room.id) "/join" }
                     }
 
                     @for voter in room.voters {
@@ -552,11 +552,11 @@ mod rooms {
         })?;
 
         Ok(views::page(
-            &room.name,
+            "Join Room",
             html! {
                 section."grid gap-lg w-800" {
                     h1."text-lg" { "JOIN THE \"" (room.name) "\" ROOM" }
-                    button."button w-full align-left" hx-post=(names::join_room_url(room_id)) hx-target="main" hx-swap="innerHTML" {
+                    button."button w-full align-left" data-testid="join-room" hx-post=(names::join_room_url(room_id)) hx-target="main" hx-swap="innerHTML" {
                         "JOIN ROOM"
                     }
                 }
@@ -955,7 +955,7 @@ mod voters {
 
                 section."two-cols" {
                     div."card card--secondary stat" hx-swap="innerHTML" sse-swap=(names::VOTER_COUNT_EVENT) {
-                        p."stat__num" { (voter_count) }
+                        p."stat__num" data-testid="voter-count" { (voter_count) }
                         p."stat__desc" { (voter_label) " in room" }
                     }
 
@@ -1442,7 +1442,7 @@ mod events {
                         Event::default()
                             .event(names::VOTER_COUNT_EVENT)
                             .data(html! {
-                                p."stat__num" { (utils::format_num(count)) }
+                                p."stat__num" data-testid="voter-count" { (utils::format_num(count)) }
                                 p."stat__desc" { (utils::pluralize(count, "voter", "voters")) " in room" }
                             }.into_string())
                     }

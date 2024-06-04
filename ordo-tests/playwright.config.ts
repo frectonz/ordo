@@ -19,7 +19,7 @@ export default defineConfig({
     launchOptions: {
       executablePath: "/home/frectonz/.nix-profile/bin/chromium",
     },
-    baseURL: "http://0.0.0.0:3030/",
+    baseURL: "http://localhost:3030/",
   },
 
   projects: [

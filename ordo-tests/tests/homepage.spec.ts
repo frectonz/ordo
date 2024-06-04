@@ -1,4 +1,5 @@
-import { test, expect, Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { createRoom } from "./utils";
 
 test("has a form", async ({ page }) => {
   await page.goto("/");
@@ -37,23 +38,6 @@ test("delete options", async ({ page }) => {
 
   expect((await page.getByPlaceholder("a choice").all()).length).toBe(2);
 });
-
-async function createRoom(page: Page, name: string, choices: string[]) {
-  await page.getByPlaceholder("my super cool vote").fill(name);
-
-  const button = page.getByText("ADD OPTION");
-  for (let i = 2; i < choices.length; i++) {
-    await button.click();
-  }
-
-  const options = page.getByPlaceholder("a choice");
-  for (let i = 0; i < choices.length; i++) {
-    await options.nth(i).fill(choices[i]);
-  }
-
-  await page.getByText("CREATE ROOM").click();
-  await page.waitForURL("/rooms/*");
-}
 
 test("create a new room", async ({ page }) => {
   await page.goto("/");
