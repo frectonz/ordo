@@ -36,7 +36,8 @@ According to Google Translate, the English word 'rank' or 'order' translates to 
 
 ```bash
 nix shell github:frectonz/ordo
-DATABASE_URL="sqlite:test.db" ordo
+ordo --database=ordo.db
+ordo --help # To see more options
 ```
 
 ### Using Docker
