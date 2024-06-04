@@ -56,7 +56,7 @@
           name = "ordo";
           tag = "latest";
           created = "now";
-          config.Cmd = "${bin}/bin/ordo";
+          config.Cmd = [ "${bin}/bin/ordo" "--database=ordo.db" ];
           config.Expose = "3030";
         };
       in

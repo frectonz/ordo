@@ -1,9 +1,23 @@
-use std::env;
+use std::{env, net::SocketAddr};
 
+use clap::Parser;
+use color_eyre::eyre::ContextCompat;
 use events::Broadcasters;
 use sqlx::{migrate::MigrateDatabase, Pool, Sqlite};
 use tracing_subscriber::fmt::format::FmtSpan;
 use warp::Filter;
+
+///  Effortlessly set up and conduct ranked choice voting
+#[derive(Parser)]
+struct Args {
+    /// Path to the sqlite database file. If the file doesn't exist, it will be created. This option is not needed if we have a DATABASE_URL environment variable.
+    #[arg(short, long)]
+    database: Option<String>,
+
+    /// The address to bind to.
+    #[arg(short, long, default_value = "0.0.0.0:3030")]
+    address: String,
+}
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -15,17 +29,21 @@ async fn main() -> color_eyre::Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    let db_url = env::var("DATABASE_URL")
-        .ok()
-        .unwrap_or("sqlite:/ordo.db".to_owned());
+    let args = Args::parse();
 
-    let exists = Sqlite::database_exists(&db_url).await.unwrap_or(false);
+    let address = args.address.parse::<SocketAddr>()?;
+    let database = args.database
+        .map(|db| format!("sqlite:{db}"))
+        .or(env::var("DATABASE_URL").ok())
+        .wrap_err("No database file provided. Set the DATABASE_URL environment variable or supply the file via the --database flag.")?;
+
+    let exists = Sqlite::database_exists(&database).await.unwrap_or(false);
 
     if !exists {
-        Sqlite::create_database(&db_url).await?;
+        Sqlite::create_database(&database).await?;
     }
 
-    let conn: Pool<Sqlite> = Pool::connect(&db_url).await?;
+    let conn: Pool<Sqlite> = Pool::connect(&database).await?;
 
     sqlx::migrate!().run(&conn).await?;
 
@@ -38,7 +56,7 @@ async fn main() -> color_eyre::Result<()> {
         .or(routes)
         .recover(rejections::handle_rejection);
 
-    warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
+    warp::serve(routes).run(address).await;
 
     Ok(())
 }
