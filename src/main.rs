@@ -1169,7 +1169,7 @@ mod voting {
                     }
 
                     div."card stat" hx-swap="innerHTML" sse-swap=(names::VOTE_COUNT_EVENT) {
-                        p."stat__num" { (recorded_votes) }
+                        p."stat__num" data-testid="votes-count" { (recorded_votes) }
                         p."stat__desc" { "recorded " (recorded_votes_label) }
                     }
                 }
@@ -1500,7 +1500,7 @@ mod events {
                     (NewVoteCount(votes), Some(_), None) => Event::default()
                         .event(names::VOTE_COUNT_EVENT)
                         .data(html! {
-                            p."stat__num" { (utils::format_num(votes)) }
+                            p."stat__num" data-testid="votes-count" { (utils::format_num(votes)) }
                             p."stat__desc" { "recorded " (utils::pluralize(votes, "vote", "votes")) }
                         }.into_string()),
 
