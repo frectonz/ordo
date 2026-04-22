@@ -74,11 +74,11 @@
             rust-analyzer
             rustToolchain
 
-            nodePackages.typescript-language-server
-            nodePackages.vscode-langservers-extracted
+            typescript-language-server
+            vscode-langservers-extracted
 
             nodejs
-            nodePackages.pnpm
+            pnpm
           ];
 
           shellHook = ''

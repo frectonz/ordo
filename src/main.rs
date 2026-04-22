@@ -76,6 +76,7 @@ mod statics {
             header::{CACHE_CONTROL, CONTENT_TYPE},
             Response,
         },
+        hyper::body::Bytes,
         Filter,
     };
 
@@ -97,7 +98,7 @@ mod statics {
         let resp = Response::builder()
             .header(CONTENT_TYPE, content_type)
             .header(CACHE_CONTROL, "max-age=3600, must-revalidate")
-            .body(file.contents())
+            .body(Bytes::from_static(file.contents()))
             .unwrap();
 
         Ok(resp)
@@ -126,8 +127,8 @@ mod homepage {
     use warp::Filter;
 
     struct Homepage {
-        room_count: i32,
-        voter_count: i32,
+        room_count: i64,
+        voter_count: i64,
     }
 
     pub fn route(
@@ -162,7 +163,7 @@ mod homepage {
         }))
     }
 
-    fn view(data: Homepage) -> Markup {
+    fn view(data: Homepage) -> views::Html {
         views::page(
             "Home",
             html! {
@@ -388,6 +389,7 @@ mod rooms {
                         voters: Vec::new(),
                     }),
                 )
+                .0
                 .into_string(),
             )
             .unwrap();
@@ -466,8 +468,8 @@ mod rooms {
     }
 
     fn view(room: RoomPage) -> Markup {
-        let voter_count = utils::format_num(room.voters.len() as i32);
-        let voter_label = utils::pluralize(room.voters.len() as i32, "voter", "voters");
+        let voter_count = utils::format_num(room.voters.len() as i64);
+        let voter_label = utils::pluralize(room.voters.len() as i64, "voter", "voters");
 
         let approved_voters_count = room.voters.iter().filter(|v| v.approved).count();
 
@@ -638,7 +640,7 @@ mod rooms {
         let resp = Response::builder()
             .header(SET_COOKIE, cookie)
             .header("HX-Replace-Url", names::voter_page_url(voter_id))
-            .body(page.into_string())
+            .body(page.0.into_string())
             .unwrap();
 
         Ok(resp)
@@ -941,7 +943,7 @@ mod voters {
         pub id: i64,
         pub room_id: i64,
         pub room_name: String,
-        pub voter_count: i32,
+        pub voter_count: i64,
         pub approved: bool,
     }
 
@@ -1026,9 +1028,9 @@ mod voters {
                 .await;
         });
 
-        Ok(html! {
+        Ok(views::Html(html! {
             button."button w-fit" disabled { "APPROVED" }
-        })
+        }))
     }
 
     async fn vote(
@@ -1126,9 +1128,9 @@ mod voters {
             }
         });
 
-        Ok(html! {
+        Ok(views::Html(html! {
             h2."text-md" { "THANKS FOR VOTING!" }
-        })
+        }))
     }
 }
 
@@ -1140,7 +1142,7 @@ mod voting {
     pub struct VoteAdminPage {
         pub room_id: i64,
         pub room_name: String,
-        pub recorded_votes: i32,
+        pub recorded_votes: i64,
         pub approved_voters: Vec<Voter>,
     }
 
@@ -1150,8 +1152,8 @@ mod voting {
     }
 
     pub fn admin_page(page: VoteAdminPage) -> Markup {
-        let approved_count = utils::format_num(page.approved_voters.len() as i32);
-        let approved_label = utils::pluralize(page.approved_voters.len() as i32, "voter", "voters");
+        let approved_count = utils::format_num(page.approved_voters.len() as i64);
+        let approved_label = utils::pluralize(page.approved_voters.len() as i64, "voter", "voters");
 
         let recorded_votes = utils::format_num(page.recorded_votes);
         let recorded_votes_label = utils::pluralize(page.recorded_votes, "vote", "votes");
@@ -1280,7 +1282,7 @@ mod voting {
                             }
 
                             div."card card--secondary" {
-                                p."text-sm" { (utils::format_num(score.score as i32)) }
+                                p."text-sm" { (utils::format_num(score.score as i64)) }
                             }
                         }
                     }
@@ -1313,14 +1315,14 @@ mod events {
     #[derive(Clone, Debug)]
     pub enum RoomEvents {
         NewVoter(i64),
-        NewVoterCount(i32),
+        NewVoterCount(i64),
         VoterApproved(i64),
         VoteStartable(i64),
         VoteEndable(i64),
         VoteStarted(Vec<String>),
         VoteEnded,
         NewVote(i64),
-        NewVoteCount(i32),
+        NewVoteCount(i64),
     }
 
     #[derive(Clone, Default)]
@@ -1539,11 +1541,11 @@ mod utils {
     use num_format::{Locale, ToFormattedString};
     use ulid::Ulid;
 
-    pub fn format_num(num: i32) -> String {
+    pub fn format_num(num: i64) -> String {
         num.to_formatted_string(&Locale::en)
     }
 
-    pub fn pluralize(num: i32, singular: &str, plural: &str) -> String {
+    pub fn pluralize(num: i64, singular: &str, plural: &str) -> String {
         if num == 1 { singular } else { plural }.to_owned()
     }
 
@@ -1619,6 +1621,14 @@ mod names {
 mod views {
     use maud::{html, Markup, PreEscaped, DOCTYPE};
 
+    pub struct Html(pub Markup);
+
+    impl warp::Reply for Html {
+        fn into_response(self) -> warp::reply::Response {
+            warp::reply::html(self.0.into_string()).into_response()
+        }
+    }
+
     fn font() -> Markup {
         html! {
             link rel="preconnect" href="https://fonts.googleapis.com";
@@ -1664,8 +1674,8 @@ mod views {
         }
     }
 
-    pub fn page(title: &str, body: Markup) -> Markup {
-        html! {
+    pub fn page(title: &str, body: Markup) -> Html {
+        Html(html! {
             (DOCTYPE)
             head {
                 meta charset="utf-8";
@@ -1682,21 +1692,21 @@ mod views {
                 (header())
                 (main(body))
             }
-        }
+        })
     }
 
-    pub fn titled(title: &str, body: Markup) -> Markup {
-        html! {
+    pub fn titled(title: &str, body: Markup) -> Html {
+        Html(html! {
             (body)
             (PreEscaped(format!("<script>document.title = `{title} - ORDO`;</script>")))
-        }
+        })
     }
 }
 
 mod rejections {
     use std::convert::Infallible;
 
-    use maud::{html, Markup};
+    use maud::html;
     use warp::{
         http::StatusCode,
         reject::{Reject, Rejection},
@@ -1786,7 +1796,7 @@ mod rejections {
         Ok(warp::reply::with_status(error_page(message), code))
     }
 
-    fn error_page(message: &str) -> Markup {
+    fn error_page(message: &str) -> views::Html {
         views::page(
             "Error",
             html! {
