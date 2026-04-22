@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE rooms\n        SET status = 1\n        WHERE id = ?1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f7dde6ff9dfd64bd2fd74f4c7add66a8edf3c5236c766b4550ae584dcd1c1ec8"
+}

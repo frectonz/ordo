@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT options\n        FROM voters\n        WHERE voters.room_id = ?1 AND voters.approved = TRUE AND options NOT NULL\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "options",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9a9d4da721cf497c76eaa53ad703e5dd4edad73447d63da254ced389a1ee7fa0"
+}

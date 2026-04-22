@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        UPDATE voters\n        SET options = ?1\n        WHERE id = ?2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1c9112ff8fe1a2e89cac123ea91af16fbae055392bf84805009446c00f35d581"
+}

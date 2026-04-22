@@ -34,22 +34,21 @@
             (pkgs.lib.hasSuffix "\.css" path) ||
             (pkgs.lib.hasSuffix "\.js" path) ||
             (pkgs.lib.hasSuffix "\.svg" path) ||
+            (pkgs.lib.hasSuffix "/.sqlx" path) ||
+            (pkgs.lib.hasInfix "/.sqlx/" path) ||
             (craneLib.filterCargoSources path type)
           ;
         };
-        commonArgs = { inherit src; };
+        commonArgs = {
+          inherit src;
+          preBuild = ''
+            export SQLX_OFFLINE=true
+          '';
+        };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         bin = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
-
-          nativeBuildInputs = [ pkgs.sqlx-cli ];
-
-          preBuild = ''
-            export DATABASE_URL=sqlite:./db.sqlite3
-            sqlx database create
-            sqlx migrate run
-          '';
         });
 
         docker = pkgs.dockerTools.buildLayeredImage {

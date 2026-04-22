@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT count(id) as count\n        FROM voters\n        WHERE room_id = ?1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e4665485d05aee2375ed49634c666cb20b6a61acc3e60b8a1c19e6cfd44c1e3c"
+}

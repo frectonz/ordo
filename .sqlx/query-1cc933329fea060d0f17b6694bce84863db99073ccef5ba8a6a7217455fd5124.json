@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO voters (voter_code, room_id)\n        VALUES (?1, ?2)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1cc933329fea060d0f17b6694bce84863db99073ccef5ba8a6a7217455fd5124"
+}

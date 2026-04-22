@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT voter_code, approved, room_id\n        FROM voters\n        WHERE id = ?1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "voter_code",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "approved",
+        "ordinal": 1,
+        "type_info": "Bool"
+      },
+      {
+        "name": "room_id",
+        "ordinal": 2,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2c2c77441fcefeb8e10575fcfec04e28233e4cdddce967dc290bae13c17be044"
+}

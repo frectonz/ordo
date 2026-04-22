@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            BEGIN TRANSACTION;\n\n            DELETE FROM voters\n            WHERE room_id = ?1;\n\n            DELETE FROM rooms\n            WHERE id = ?1;\n\n            COMMIT;\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "df2c21d2cfcc8b884f9a1a3eb8a70492951429d2ffef6d14573e2e310ba3a440"
+}

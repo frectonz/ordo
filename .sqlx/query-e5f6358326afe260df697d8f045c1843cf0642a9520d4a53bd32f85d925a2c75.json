@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT admin_code, name, options\n        FROM rooms\n        WHERE id = ?1 AND status = 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "admin_code",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "options",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e5f6358326afe260df697d8f045c1843cf0642a9520d4a53bd32f85d925a2c75"
+}

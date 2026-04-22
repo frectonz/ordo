@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT options\n        FROM rooms\n        WHERE id = ?1 AND status = 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "options",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7cd18ad6b276005a8ced850615f076b5f8c4c1e696366528cfcf8d75d04dfe9e"
+}
